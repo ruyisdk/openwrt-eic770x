@@ -1,0 +1,98 @@
+From 24d5760d6b289de2c3736bc17c70540a9150e650 Mon Sep 17 00:00:00 2001
+From: donghuawei <donghuawei@eswincomputing.com>
+Date: Wed, 29 May 2024 14:11:20 +0800
+Subject: [PATCH 39/68] WIN2030-14758:fix:dsp dma-ranges buf fix
+
+Changelogs:
+    linux 6.6 reslove dma-ranges from parent.
+
+Change-Id: Ifa7fa31251a286e3a13a88d954adead426a93f0e
+---
+ arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi | 5 +----
+ arch/riscv/boot/dts/eswin/eswin-win2030-die1-soc.dtsi | 5 +----
+ 2 files changed, 2 insertions(+), 8 deletions(-)
+
+--- a/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
++++ b/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
+@@ -553,6 +553,7 @@
+ 			reg = <0x0 0x52280400 0x0 0x10000>,
+ 					<0x0 0x51810000 0x0 0x8000>;
+ 			ranges;
++			dma-ranges = <0x0 0x30000000 0x0 0xc0000000 0x0 0xce000000>;
+ 			compatible = "es-dsp-subsys", "simple-bus";
+ 			clocks = <&d0_clock WIN2030_CLK_DSPT_CFG_CLK>;
+ 			clock-names = "cfg_clk";
+@@ -586,7 +587,6 @@
+ 				host-irq-mode = <1>;
+ 				firmware-name = "eic7700_dsp_fw";
+ 				process-id = <0>;
+-				dma-ranges = <0x30000000 0x0 0xc0000000 0xce000000>;
+ 				iommus = <&smmu0 WIN2030_SID_DSP_0>;
+ 				tbus = <WIN2030_TBUID_DSP0>;
+ 				dma-noncoherent;
+@@ -616,7 +616,6 @@
+ 				host-irq-mode = <1>;
+ 				firmware-name = "eic7700_dsp_fw";
+ 				process-id = <1>;
+-				dma-ranges = <0x30000000 0x0 0xc0000000 0xce000000>;
+ 				iommus = <&smmu0 WIN2030_SID_DSP_1>;
+ 				tbus = <WIN2030_TBUID_DSP1>;
+ 				dma-noncoherent;
+@@ -646,7 +645,6 @@
+ 				host-irq-mode = <1>;
+ 				firmware-name = "eic7700_dsp_fw";
+ 				process-id = <2>;
+-				dma-ranges = <0x30000000 0x0 0xc0000000 0xce000000>;
+ 				iommus = <&smmu0 WIN2030_SID_DSP_2>;
+ 				tbus = <WIN2030_TBUID_DSP2>;
+ 				dma-noncoherent;
+@@ -676,7 +674,6 @@
+ 				host-irq-mode = <1>;
+ 				firmware-name = "eic7700_dsp_fw";
+ 				process-id = <3>;
+-				dma-ranges = <0x30000000 0x0 0xc0000000 0xce000000>;
+ 				iommus = <&smmu0 WIN2030_SID_DSP_3>;
+ 				tbus = <WIN2030_TBUID_DSP3>;
+ 				dma-noncoherent;
+--- a/arch/riscv/boot/dts/eswin/eswin-win2030-die1-soc.dtsi
++++ b/arch/riscv/boot/dts/eswin/eswin-win2030-die1-soc.dtsi
+@@ -1279,6 +1279,7 @@
+ 			reg = <0x0 0x72280400 0x0 0x10000>,
+ 				<0x0 0x71810000 0x0 0x8000>;
+ 			ranges;
++			dma-ranges = <0x0 0x30000000 0x0 0xc0000000 0x0 0xce000000>;
+ 			compatible = "es-dsp-subsys", "simple-bus";
+ 			clocks = <&d1_clock WIN2030_CLK_DSPT_CFG_CLK>;
+ 			clock-names = "cfg_clk";
+@@ -1311,7 +1312,6 @@
+ 				host-irq-mode = <1>;
+ 				firmware-name = "eic7702_dsp_fw";
+ 				process-id = <0>;
+-				dma-ranges = <0x30000000 0x0 0xc0000000 0xce000000>;
+ 				iommus = <&smmu1 WIN2030_SID_DSP_0>;
+ 				tbus = <WIN2030_TBUID_DSP0>;
+ 				dma-noncoherent;
+@@ -1341,7 +1341,6 @@
+ 				host-irq-mode = <1>;
+ 				firmware-name = "eic7702_dsp_fw";
+ 				process-id = <1>;
+-				dma-ranges = <0x30000000 0x0 0xc0000000 0xce000000>;
+ 				iommus = <&smmu1 WIN2030_SID_DSP_1>;
+ 				tbus = <WIN2030_TBUID_DSP1>;
+ 				dma-noncoherent;
+@@ -1371,7 +1370,6 @@
+ 				host-irq-mode = <1>;
+ 				firmware-name = "eic7702_dsp_fw";
+ 				process-id = <2>;
+-				dma-ranges = <0x30000000 0x0 0xc0000000 0xce000000>;
+ 				iommus = <&smmu1 WIN2030_SID_DSP_2>;
+ 				tbus = <WIN2030_TBUID_DSP2>;
+ 				dma-noncoherent;
+@@ -1401,7 +1399,6 @@
+ 				host-irq-mode = <1>;
+ 				firmware-name = "eic7702_dsp_fw";
+ 				process-id = <3>;
+-				dma-ranges = <0x30000000 0x0 0xc0000000 0xce000000>;
+ 				iommus = <&smmu1 WIN2030_SID_DSP_3>;
+ 				tbus = <WIN2030_TBUID_DSP3>;
+ 				dma-noncoherent;

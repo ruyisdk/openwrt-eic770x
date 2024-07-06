@@ -1,0 +1,30 @@
+From bd479966c7b95a9fbe34c2570b102e5a8fcac7bc Mon Sep 17 00:00:00 2001
+From: linmin <linmin@eswincomputing.com>
+Date: Tue, 28 May 2024 13:14:44 +0800
+Subject: [PATCH 37/68] WIN2030-14758:fix(llc_spram):Removed linux version
+ check
+
+Changelogs:
+1.Remove the KERNEL_VERSION check from llc_spram.c since it is
+  a builtin driver.
+
+Change-Id: Ib6266b2ad6e6aa7f8b306c16f7107cfd319a38a9
+---
+ drivers/memory/eswin/codacache/llc_spram.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+--- a/drivers/memory/eswin/codacache/llc_spram.c
++++ b/drivers/memory/eswin/codacache/llc_spram.c
+@@ -103,11 +103,10 @@ struct spram_dev {
+ 	struct reset_control *rstc_llc;
+ };
+ 
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,6,0)
+ #define dma_buf_map		iosys_map
+ #define dma_buf_map_set_vaddr	iosys_map_set_vaddr
+ #define dma_buf_map_clear	iosys_map_clear
+-#endif
++
+ #define spram_phys_to_virt(spram, phys) \
+ 	 (spram->virt_base + phys - spram->phys_addr)
+ 

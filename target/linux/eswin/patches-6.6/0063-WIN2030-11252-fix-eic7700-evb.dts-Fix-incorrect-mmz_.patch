@@ -1,0 +1,26 @@
+From efa5178c2788cb4717037eed6486b1d646a668d5 Mon Sep 17 00:00:00 2001
+From: linmin <linmin@eswincomputing.com>
+Date: Tue, 2 Jul 2024 13:46:10 +0800
+Subject: [PATCH 63/68] WIN2030-11252:fix(eic7700-evb.dts):Fix incorrect
+ mmz_range
+
+Changelogs:
+1.There is error range for mmz_nid_0_part_0
+  it should be reg = <0x3 0x0 0x1 0x0>;
+
+Change-Id: I42708b3a198a8cfd6b2aadd9fc851e05e429e117
+---
+ arch/riscv/boot/dts/eswin/eic7700-evb.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb.dts
+@@ -128,7 +128,7 @@
+ 
+                 mmz_nid_0_part_0 {
+                         compatible = "eswin-reserve-memory";
+-                        reg = <0x3 0x80000000 0x1 0x0>;
++                        reg = <0x3 0x0 0x1 0x0>;
+                         no-map;
+                 };
+ 	};

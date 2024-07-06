@@ -1,0 +1,24 @@
+From a676306b57f2b8daf01733164873493ccf2e9abb Mon Sep 17 00:00:00 2001
+From: huangyifeng <huangyifeng@eswincomputing.com>
+Date: Tue, 28 May 2024 09:37:29 +0800
+Subject: [PATCH 34/68] WIN2030-14758:fix:Add rtc(pcf8573) driver in
+ win2030_defconfig
+
+Changelogs:
+            Add rtc(pcf8573) driver in win2030_defconfig
+
+Change-Id: Ifecdafd1f2ee59f5b5318b8efa2064eb22c3346d
+---
+ arch/riscv/configs/win2030_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+--- a/arch/riscv/configs/win2030_defconfig
++++ b/arch/riscv/configs/win2030_defconfig
+@@ -247,6 +247,7 @@ CONFIG_LEDS_TRIGGER_DEFAULT_ON=y
+ CONFIG_EDAC=y
+ CONFIG_EDAC_ESWIN=y
+ CONFIG_RTC_CLASS=y
++CONFIG_RTC_DRV_PCF8563=y
+ CONFIG_DMADEVICES=y
+ CONFIG_DW_AXI_DMAC=y
+ CONFIG_DMATEST=y

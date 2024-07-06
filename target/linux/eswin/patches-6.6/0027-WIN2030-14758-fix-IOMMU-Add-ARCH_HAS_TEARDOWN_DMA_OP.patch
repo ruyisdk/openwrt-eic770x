@@ -1,0 +1,42 @@
+From 6efd796ec73df1f46af99a3201a99b5e584ba130 Mon Sep 17 00:00:00 2001
+From: linmin <linmin@eswincomputing.com>
+Date: Mon, 29 Apr 2024 08:59:44 +0800
+Subject: [PATCH 27/68] WIN2030-14758:fix(IOMMU):Add ARCH_HAS_TEARDOWN_DMA_OPS
+
+Changelogs:
+1.Added "select ARCH_HAS_TEARDOWN_DMA_OPS if IOMMU_SUPPORT"
+  in drivers/soc/sifive/Kconfig
+2.Added arch_teardown_dma_ops() function in arch/riscv/mm/dma-noncoherent.c
+
+Change-Id: I10bd73bb307e016b696652b837c0463b0cd35bc4
+---
+ arch/riscv/mm/dma-noncoherent.c | 7 +++++++
+ drivers/soc/sifive/Kconfig      | 1 +
+ 2 files changed, 8 insertions(+)
+
+--- a/arch/riscv/mm/dma-noncoherent.c
++++ b/arch/riscv/mm/dma-noncoherent.c
+@@ -138,6 +138,13 @@ void arch_dma_prep_coherent(struct page
+ 	ALT_CMO_OP(flush, flush_addr, size, riscv_cbom_block_size);
+ }
+ 
++#ifdef CONFIG_IOMMU_DMA
++void arch_teardown_dma_ops(struct device *dev)
++{
++	dev->dma_ops = NULL;
++}
++#endif
++
+ void arch_setup_dma_ops(struct device *dev, u64 dma_base, u64 size,
+ 		const struct iommu_ops *iommu, bool coherent)
+ {
+--- a/drivers/soc/sifive/Kconfig
++++ b/drivers/soc/sifive/Kconfig
+@@ -20,6 +20,7 @@ config ARCH_ESWIN_EIC770X_SOC_FAMILY
+ 	select ESWIN_RSV_MEMBLOCK
+ 	select ESWIN_CODACACHE_CONTROLLER
+ 	select IOMMU_DMA if IOMMU_SUPPORT
++	select ARCH_HAS_TEARDOWN_DMA_OPS if IOMMU_SUPPORT
+ 
+ menu "ESWIN EIC770X SoC Family Selection"
+ 	depends on ARCH_ESWIN_EIC770X_SOC_FAMILY

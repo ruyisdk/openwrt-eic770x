@@ -1,0 +1,1382 @@
+From fadcaa5e6b593693dc046d557d24499ae9b9ea94 Mon Sep 17 00:00:00 2001
+From: xuxiang <xuxiang@eswincomputing.com>
+Date: Mon, 27 May 2024 18:53:47 +0800
+Subject: [PATCH 38/68] WIN2030-14758: perf:update dma, pwm, timer driver
+
+Changelogs:
+1. Optimizing dma drivers
+2. Reconstruct the pwm driver
+3. Porting timer driver from 5.17 (not optimized)
+
+Change-Id: I1b8bfed898b9ab11cedffcac9c5661d3c314d8f5
+---
+ .../dts/eswin/eswin-win2030-die0-soc.dtsi     |   4 +-
+ arch/riscv/configs/win2030_defconfig          |   1 +
+ drivers/clocksource/Kconfig                   |   5 +
+ drivers/clocksource/Makefile                  |   1 +
+ drivers/clocksource/timer-eswin.c             | 293 ++++++++++++++
+ .../dma/dw-axi-dmac/dw-axi-dmac-platform.c    |  89 ++---
+ drivers/hwmon/eswin-fan-control.c             |  17 +-
+ drivers/iommu/eswin/eswin-win2030-sid.c       |  47 +++
+ drivers/pwm/Makefile                          |   2 +-
+ drivers/pwm/pwm-dwc-eswin.c                   | 348 ++++++++++++++++
+ drivers/pwm/pwm-eswin.c                       | 370 ------------------
+ include/linux/eswin-win2030-sid-cfg.h         |   1 +
+ 12 files changed, 738 insertions(+), 440 deletions(-)
+ create mode 100644 drivers/clocksource/timer-eswin.c
+ create mode 100644 drivers/pwm/pwm-dwc-eswin.c
+ delete mode 100644 drivers/pwm/pwm-eswin.c
+
+--- a/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
++++ b/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
+@@ -1516,11 +1516,11 @@
+ 			compatible = "eswin,pwm-eswin";
+ 			#pwm-cells = <2>;
+ 			reg = <0x0 0x50818000 0x0 0x4000>;
+-			clock-names = "pwm","pclk";
++			clock-names = "pclk";
+ 			clocks = <&d0_clock WIN2030_CLK_LSP_TIMER_PCLK>;
+ 			clock-frequency = <200000000>;
+ 			resets = <&d0_reset TIMER_RST_CTRL SW_TIMER_RST_N>;
+-			reset-names = "pwmrst";
++			reset-names = "rst";
+ 			pinctrl-names = "default";
+ 			pinctrl-0 = <&pinctrl_pwm0_default>;
+ 			status = "disabled";
+--- a/arch/riscv/configs/win2030_defconfig
++++ b/arch/riscv/configs/win2030_defconfig
+@@ -320,3 +320,4 @@ CONFIG_RCU_EQS_DEBUG=y
+ # CONFIG_FTRACE is not set
+ # CONFIG_RUNTIME_TESTING_MENU is not set
+ CONFIG_MEMTEST=y
++CONFIG_TIMER_ESWIN=y
+\ No newline at end of file
+--- a/drivers/clocksource/Kconfig
++++ b/drivers/clocksource/Kconfig
+@@ -73,6 +73,11 @@ config DW_APB_TIMER_OF
+ 	select DW_APB_TIMER
+ 	select TIMER_OF
+ 
++config TIMER_ESWIN
++	tristate "ESWIN timer support"
++	help
++	  Enables the support for the eswin timer.
++
+ config FTTMR010_TIMER
+ 	bool "Faraday Technology timer driver" if COMPILE_TEST
+ 	depends on HAS_IOMEM
+--- a/drivers/clocksource/Makefile
++++ b/drivers/clocksource/Makefile
+@@ -21,6 +21,7 @@ obj-$(CONFIG_OMAP_DM_TIMER)	+= timer-ti-
+ obj-$(CONFIG_OMAP_DM_SYSTIMER)	+= timer-ti-dm-systimer.o
+ obj-$(CONFIG_DW_APB_TIMER)	+= dw_apb_timer.o
+ obj-$(CONFIG_DW_APB_TIMER_OF)	+= dw_apb_timer_of.o
++obj-$(CONFIG_TIMER_ESWIN)	+= timer-eswin.o
+ obj-$(CONFIG_FTTMR010_TIMER)	+= timer-fttmr010.o
+ obj-$(CONFIG_IXP4XX_TIMER)	+= timer-ixp4xx.o
+ obj-$(CONFIG_ROCKCHIP_TIMER)      += timer-rockchip.o
+--- /dev/null
++++ b/drivers/clocksource/timer-eswin.c
+@@ -0,0 +1,293 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (C) ESWIN Electronics Co.Ltd
++ *
++ * Eswin timer driver
++ */
++
++#include <linux/clk.h>
++#include <linux/clockchips.h>
++#include <linux/interrupt.h>
++#include <linux/mfd/stm32-lptimer.h>
++#include <linux/module.h>
++#include <linux/of_address.h>
++#include <linux/of_irq.h>
++#include <linux/platform_device.h>
++#include <linux/pm_wakeirq.h>
++#include <linux/reset.h>
++#include <linux/miscdevice.h>
++
++#define APBT_MIN_PERIOD         4
++#define APBT_MIN_DELTA_USEC     200
++
++#define APBTMR_N_LOAD_COUNT     0x00
++#define APBTMR_N_CURRENT_VALUE  0x04
++#define APBTMR_N_CONTROL        0x08
++#define APBTMR_N_EOI            0x0c
++#define APBTMR_N_INT_STATUS     0x10
++
++#define APBTMRS_INT_STATUS      0xa0
++#define APBTMRS_EOI             0xa4
++#define APBTMRS_RAW_INT_STATUS  0xa8
++#define APBTMRS_COMP_VERSION    0xac
++
++#define APBTMR_CONTROL_ENABLE   (1 << 0)
++/* 1: periodic, 0:free running. */
++#define APBTMR_CONTROL_MODE_PERIODIC    (1 << 1)
++#define APBTMR_CONTROL_INT              (1 << 2)
++
++#define APBTMR_MAX_CNT  0xFFFFFFFF
++#define APBTMR_EACH_OFS 0x14
++
++struct eswin_timer {
++    /* Memory Mapped Register */
++    struct resource *mem;
++    void __iomem *mmio_base;
++    u32 perf_count;
++};
++
++static struct eswin_timer *perf_timer = NULL;
++static void __iomem *perf_cnt_base = NULL;
++
++static inline u32 eswin_readl(struct eswin_timer *timer, unsigned long offs)
++{
++    return readl(timer->mmio_base + offs);
++}
++
++static inline void eswin_writel(struct eswin_timer *timer, u32 val,
++            unsigned long offs)
++{
++    writel(val, timer->mmio_base + offs);
++}
++
++static inline u32 eswin_readl_relaxed(struct eswin_timer *timer, unsigned long offs)
++{
++    return readl_relaxed(timer->mmio_base + offs);
++}
++
++static inline void eswin_writel_relaxed(struct eswin_timer *timer, u32 val,
++            unsigned long offs)
++{
++    writel_relaxed(val, timer->mmio_base + offs);
++}
++
++static irqreturn_t timer_irq_handler(int irq, void *dev_id)
++{
++    struct eswin_timer *time = dev_id;
++    pr_err("Enter timer_irq_handler  irq = %x, time->mmio_base = %lx\n",irq,(long)time->mmio_base);
++    /*
++    * clear interrupt read(0xa4)
++    * read intr status read(0xa0)
++    */
++    eswin_readl(time,APBTMRS_INT_STATUS);
++    eswin_readl(time,APBTMRS_EOI);
++    return IRQ_HANDLED;
++}
++
++static int __init timer_init(struct device_node *np)
++{
++    struct clk *pclk, *timer_aclk, *timer3_clk8;
++    struct reset_control *trstc0,*trstc1,*trstc2,*trstc3,*trstc4,*trstc5,*trstc6,*trstc7,*prstc;
++
++    /*
++    * Reset the timer if the reset control is available, wiping
++    * out the state the firmware may have left it
++    */
++    trstc0 = of_reset_control_get(np, "trst0");
++    if (!IS_ERR(trstc0)) {
++        reset_control_assert(trstc0);
++        reset_control_deassert(trstc0);
++    }
++    trstc1 = of_reset_control_get(np, "trst1");
++    if (!IS_ERR(trstc1)) {
++        reset_control_assert(trstc1);
++        reset_control_deassert(trstc1);
++    }
++    trstc2 = of_reset_control_get(np, "trst2");
++    if (!IS_ERR(trstc2)) {
++        reset_control_assert(trstc2);
++        reset_control_deassert(trstc2);
++    }
++    trstc3 = of_reset_control_get(np, "trst3");
++    if (!IS_ERR(trstc3)) {
++        reset_control_assert(trstc3);
++        reset_control_deassert(trstc3);
++    }
++    trstc4 = of_reset_control_get(np, "trst4");
++    if (!IS_ERR(trstc4)) {
++        reset_control_assert(trstc4);
++        reset_control_deassert(trstc4);
++    }
++    trstc5 = of_reset_control_get(np, "trst5");
++    if (!IS_ERR(trstc5)) {
++        reset_control_assert(trstc5);
++        reset_control_deassert(trstc5);
++    }
++    trstc6 = of_reset_control_get(np, "trst6");
++    if (!IS_ERR(trstc6)) {
++        reset_control_assert(trstc6);
++        reset_control_deassert(trstc6);
++    }
++    trstc7 = of_reset_control_get(np, "trst7");
++    if (!IS_ERR(trstc7)) {
++        reset_control_assert(trstc7);
++        reset_control_deassert(trstc7);
++    }
++    prstc = of_reset_control_get(np, "prst");
++    if (!IS_ERR(prstc)) {
++        reset_control_assert(prstc);
++        reset_control_deassert(prstc);
++    }
++
++    /*
++    * Not all implementations use a peripheral clock, so don't panic
++    * if it's not present
++    */
++    pclk = of_clk_get_by_name(np, "pclk");
++    if (!IS_ERR(pclk))
++        if (clk_prepare_enable(pclk))
++            pr_warn("pclk for %pOFn is present, but could not be activated\n",np);
++    timer_aclk = of_clk_get_by_name(np, "timer_aclk");
++    if (!IS_ERR(timer_aclk))
++        if (clk_prepare_enable(timer_aclk))
++            pr_warn("timer_aclk for %pOFn is present, but could not be activated\n",np);
++    timer3_clk8 = of_clk_get_by_name(np, "timer3_clk8");
++    if (!IS_ERR(timer3_clk8))
++        if (clk_prepare_enable(timer3_clk8))
++            pr_warn("timer3_clk8 for %pOFn is present, but could not be activated\n",np);
++
++    return 0;
++}
++
++static int timer_mmap(struct file *file, struct vm_area_struct *vma)
++{
++    struct resource *res;
++    u64 base;
++    if (perf_timer == NULL) {
++        return -EIO;
++    }
++
++    res = perf_timer->mem;
++
++    base = res->start + perf_timer->perf_count * 0x14;
++    printk("%s, %d, chan=%d.\n\n", __func__, __LINE__, perf_timer->perf_count);
++    remap_pfn_range(vma, vma->vm_start, base >> 12,
++            vma->vm_end - vma->vm_start, vma->vm_page_prot);
++    return 0;
++}
++
++static struct file_operations timer_fops = {
++    .owner = THIS_MODULE,
++    .mmap = timer_mmap,
++};
++
++static struct miscdevice timer_misc = {
++    .minor = MISC_DYNAMIC_MINOR,
++    .name = "perf_count",
++    .fops = &timer_fops,
++};
++
++/*
++ * use timer0 channel 7 for performance statics counter.
++ *
++ * This counter freq is 24MHz, and max cnt value is 0xFFFF_FFFF, it decrease one every timer_clk, and when
++ * decrease zero, it will load the max cnt, and repeat this.
++ *
++ * resolution: about 42ns per cnt. So the max time that will not overflow is 42 * 0xFFFF_FFFF ~= 180s
++ */
++
++u32 get_perf_timer_cnt(void)
++{
++    return APBTMR_MAX_CNT - readl(perf_cnt_base);
++}
++EXPORT_SYMBOL(get_perf_timer_cnt);
++
++static int init_timer_perf_counter(struct eswin_timer *time, u32 chan)
++{
++    int ret;
++
++    time->perf_count = chan;
++    eswin_writel(time, APBTMR_MAX_CNT, chan * APBTMR_EACH_OFS + APBTMR_N_LOAD_COUNT);
++    eswin_writel(time, 0x7, chan * APBTMR_EACH_OFS + APBTMR_N_CONTROL);
++    ret = misc_register(&timer_misc);
++    perf_timer = time;
++    perf_cnt_base = perf_timer->mmio_base + chan * APBTMR_EACH_OFS + APBTMR_N_CURRENT_VALUE;
++    return 0;
++}
++
++static int eswin_timer_probe(struct platform_device *pdev)
++{
++    struct device *dev = &pdev->dev;
++    struct device_node *np = dev->of_node;
++    struct eswin_timer *time;
++    struct resource *res;
++    int error, irq, ret;
++    u32 val;
++
++    dev_err(&pdev->dev, "eswin_timer_probe\n");
++    /*add eswin timer*/
++    time = devm_kzalloc(&pdev->dev, sizeof(struct eswin_timer), GFP_KERNEL);
++    if (!time)
++        return -ENOMEM;
++
++    res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++    if (!res) {
++        dev_err(&pdev->dev, "failed to get register memory\n");
++        return -EINVAL;
++    }
++    time->mem = res;
++
++    time->mmio_base = devm_ioremap_resource(&pdev->dev, res);
++    if (IS_ERR(time->mmio_base))
++        return PTR_ERR(time->mmio_base);
++
++    irq = platform_get_irq(pdev, 0);
++    if (irq < 0)
++        return -ENXIO;
++
++    error = devm_request_irq(&pdev->dev, irq, timer_irq_handler, 0,
++                                pdev->name, time);
++    if (error) {
++        dev_err(&pdev->dev, "could not request IRQ %d\n", irq);
++        return error;
++    }
++
++    ret = timer_init(np);
++    if (ret)
++        return ret;
++
++    time->perf_count = 0xff;
++
++    ret = of_property_read_u32(np, "perf_count", &val);
++    if (!ret) {
++        init_timer_perf_counter(time, val);
++    }
++
++    dev_err(&pdev->dev, "eswin_timer_probe success\n");
++    return 0;
++}
++
++static int eswin_timer_remove(struct platform_device *pdev)
++{
++    return -EBUSY; /* cannot unregister clockevent */
++}
++
++static const struct of_device_id eswin_timer_of_match[] = {
++    { .compatible = "eswin,eswin-timer", },
++    {},
++};
++MODULE_DEVICE_TABLE(of, eswin_timer_of_match);
++
++static struct platform_driver eswin_timer_driver = {
++    .probe  = eswin_timer_probe,
++    .remove = eswin_timer_remove,
++    .driver = {
++        .name = "eswin-timer",
++        .of_match_table = of_match_ptr(eswin_timer_of_match),
++    },
++};
++module_platform_driver(eswin_timer_driver);
++
++MODULE_ALIAS("platform:eswin-timer");
++MODULE_DESCRIPTION("eswin timer driver");
++MODULE_LICENSE("GPL v2");
+--- a/drivers/dma/dw-axi-dmac/dw-axi-dmac-platform.c
++++ b/drivers/dma/dw-axi-dmac/dw-axi-dmac-platform.c
+@@ -55,15 +55,14 @@
+ #define AXI_DMA_FLAG_HAS_APB_REGS	BIT(0)
+ #define AXI_DMA_FLAG_HAS_RESETS		BIT(1)
+ #define AXI_DMA_FLAG_USE_CFG2		BIT(2)
+-#define AXI_DMA_FLAG_HAS_2RESETS		BIT(3)
++#define AXI_DMA_FLAG_HAS_2RESETS	BIT(3)
++#define AXI_DMA_FLAG_HAS_EIC7700	BIT(4)
+ 
+ #define AWSMMUSID	GENMASK(31, 24) // The sid of write operation
+ #define AWSMMUSSID	GENMASK(23, 16) // The ssid of write operation
+ #define ARSMMUSID	GENMASK(15, 8)	// The sid of read operation
+ #define ARSMMUSSID	GENMASK(7, 0)	// The ssid of read operation
+ 
+-static int eswin_dma_sid_cfg(struct device *dev);
+-
+ static inline void
+ axi_dma_iowrite32(struct axi_dma_chip *chip, u32 reg, u32 val)
+ {
+@@ -233,6 +232,7 @@ static void axi_dma_hw_init(struct axi_d
+ {
+ 	int ret;
+ 	u32 i;
++	int flags;
+ 
+ 	for (i = 0; i < chip->dw->hdata->nr_channels; i++) {
+ 		axi_chan_irq_disable(&chip->dw->chan[i], DWAXIDMAC_IRQ_ALL);
+@@ -242,15 +242,19 @@ static void axi_dma_hw_init(struct axi_d
+ 	if (ret)
+ 		dev_warn(chip->dev, "Unable to set coherent mask\n");
+ 
+-	if (of_node_name_prefix(chip->dev->of_node, "dma-controller-hsp")) {
+-		eswin_dma_sid_cfg(chip->dev);
+-	}
+-	else {
+-		win2030_aon_sid_cfg(chip->dev);
++	flags = (uintptr_t)of_device_get_match_data(chip->dev);
++	if (flags & AXI_DMA_FLAG_HAS_EIC7700) {
++		if (of_node_name_prefix(chip->dev->of_node, "dma-controller-hsp")) {
++			win2030_dma_sid_cfg(chip->dev);
++		}
++		else {
++			win2030_aon_sid_cfg(chip->dev);
++		}
++
++		/* TBU power up */
++		win2030_tbu_power(chip->dev, true);
+ 	}
+ 
+-	/* TBU power up */
+-	win2030_tbu_power(chip->dev, true);
+ }
+ 
+ static u32 axi_chan_get_xfer_width(struct axi_dma_chan *chan, dma_addr_t src,
+@@ -717,7 +721,7 @@ static int dw_axi_dma_set_hw_desc(struct
+ 	hw_desc->lli->block_ts_lo = cpu_to_le32(block_ts - 1);
+ 
+ 	ctllo |= DWAXIDMAC_BURST_TRANS_LEN_4 << CH_CTL_L_DST_MSIZE_POS |
+-		DWAXIDMAC_BURST_TRANS_LEN_4 << CH_CTL_L_SRC_MSIZE_POS;
++		 DWAXIDMAC_BURST_TRANS_LEN_4 << CH_CTL_L_SRC_MSIZE_POS;
+ 	hw_desc->lli->ctl_lo = cpu_to_le32(ctllo);
+ 
+ 	set_desc_src_master(hw_desc, chan);
+@@ -1372,8 +1376,11 @@ static struct dma_chan *dw_axi_dma_of_xl
+ 
+ 	chan = dchan_to_axi_dma_chan(dchan);
+ 	chan->hw_handshake_num = dma_spec->args[0];
+-	if (dma_spec->args_count > 1)
+-		win2030_dma_sel_cfg(chan, dma_spec->args[1]);
++	int flags = (uintptr_t)of_device_get_match_data(chan->chip->dev);
++	if (flags & AXI_DMA_FLAG_HAS_EIC7700) {
++		if (dma_spec->args_count > 1)
++			win2030_dma_sel_cfg(chan, dma_spec->args[1]);
++	}
+ 	return dchan;
+ }
+ 
+@@ -1628,57 +1635,13 @@ err_pm_disable:
+ 	return ret;
+ }
+ 
+-static int eswin_dma_sid_cfg(struct device *dev)
+-{
+-	int ret;
+-	struct regmap *regmap;
+-	int hsp_mmu_dma_reg;
+-	u32 rdwr_sid_ssid;
+-	u32 sid;
+-	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+-
+-	/* not behind smmu, use the default reset value(0x0) of the reg as streamID*/
+-	if (fwspec == NULL) {
+-		dev_dbg(dev, "dev is not behind smmu, skip configuration of sid\n");
+-		return 0;
+-	}
+-	sid = fwspec->ids[0];
+-
+-	regmap = syscon_regmap_lookup_by_phandle(dev->of_node, "eswin,hsp_sp_csr");
+-	if (IS_ERR(regmap)) {
+-		dev_dbg(dev, "No hsp_sp_csr phandle specified\n");
+-		return 0;
+-	}
+-
+-	ret = of_property_read_u32_index(dev->of_node, "eswin,hsp_sp_csr", 1,
+-					&hsp_mmu_dma_reg);
+-	if (ret) {
+-		dev_err(dev, "can't get dma sid cfg reg offset (%d)\n", ret);
+-		return ret;
+-	}
+-
+-	/* make the reading sid the same as writing sid, ssid is fixed to zero */
+-	rdwr_sid_ssid  = FIELD_PREP(AWSMMUSID, sid);
+-	rdwr_sid_ssid |= FIELD_PREP(ARSMMUSID, sid);
+-	rdwr_sid_ssid |= FIELD_PREP(AWSMMUSSID, 0);
+-	rdwr_sid_ssid |= FIELD_PREP(ARSMMUSSID, 0);
+-	regmap_write(regmap, hsp_mmu_dma_reg, rdwr_sid_ssid);
+-
+-	ret = win2030_dynm_sid_enable(dev_to_node(dev));
+-	if (ret < 0)
+-		dev_err(dev, "failed to config dma streamID(%d)!\n", sid);
+-	else
+-		dev_dbg(dev, "success to config dma streamID(%d)!\n", sid);
+-
+-	return ret;
+-}
+-
+ static int dw_remove(struct platform_device *pdev)
+ {
+ 	struct axi_dma_chip *chip = platform_get_drvdata(pdev);
+ 	struct dw_axi_dma *dw = chip->dw;
+ 	struct axi_dma_chan *chan, *_chan;
+ 	u32 i;
++	unsigned int flags;
+ 
+ 	/* Enable clk before accessing to registers */
+ 	clk_prepare_enable(chip->cfgr_clk);
+@@ -1702,8 +1665,11 @@ static int dw_remove(struct platform_dev
+ 		list_del(&chan->vc.chan.device_node);
+ 		tasklet_kill(&chan->vc.task);
+ 	}
+-	/* TBU power down before reset */
+-	win2030_tbu_power(chip->dev, false);
++	flags = (uintptr_t)of_device_get_match_data(&pdev->dev);
++	if (flags & AXI_DMA_FLAG_HAS_EIC7700) {
++		/* TBU power down before reset */
++		win2030_tbu_power(chip->dev, false);
++	}
+ 
+ 	return 0;
+ }
+@@ -1723,7 +1689,7 @@ static const struct of_device_id dw_dma_
+ 		.data = (void *)(AXI_DMA_FLAG_HAS_RESETS | AXI_DMA_FLAG_USE_CFG2),
+ 	}, {
+ 		.compatible = "eswin,eic770x-axi-dma",
+-		.data = (void *)(AXI_DMA_FLAG_HAS_2RESETS | AXI_DMA_FLAG_USE_CFG2),
++		.data = (void *)(AXI_DMA_FLAG_HAS_2RESETS | AXI_DMA_FLAG_USE_CFG2 | AXI_DMA_FLAG_HAS_EIC7700),
+ 	},
+ 	{}
+ };
+@@ -1743,3 +1709,4 @@ module_platform_driver(dw_driver);
+ MODULE_LICENSE("GPL v2");
+ MODULE_DESCRIPTION("Synopsys DesignWare AXI DMA Controller platform driver");
+ MODULE_AUTHOR("Eugeniy Paltsev <Eugeniy.Paltsev@synopsys.com>");
++MODULE_AUTHOR("XuXiang <xuxiang@eswincomputing.com>");
+--- a/drivers/hwmon/eswin-fan-control.c
++++ b/drivers/hwmon/eswin-fan-control.c
+@@ -437,6 +437,7 @@ static int eswin_fan_control_probe(struc
+ 	const struct of_device_id *id;
+ 	const char *name = "eswin_fan_control";
+ 	struct pwm_state state;
++	struct pwm_args pwm_args;
+ 	int ret;
+ 
+ 	id = of_match_node(eswin_fan_control_of_match, pdev->dev.of_node);
+@@ -498,22 +499,26 @@ static int eswin_fan_control_probe(struc
+ 	}
+ 	ctl->pwm = pwm_get(&pdev->dev, NULL);
+ 	if (IS_ERR(ctl->pwm)) {
+-		dev_dbg(&pdev->dev, "Unable to request PWM, trying legacy API\n");
+-	}
+-
+-	if (IS_ERR(ctl->pwm)) {
+ 		ret = PTR_ERR(ctl->pwm);
+ 		dev_err(&pdev->dev, "Failed to request pwm device: %d\n", ret);
+ 		return ret;
+ 	}
+-	pwm_enable(ctl->pwm);
+-	pwm_init_state(ctl->pwm, &state);
++
++	pwm_get_state(ctl->pwm, &state);
++
++	/* Then fill it with the reference config */
++	pwm_get_args(ctl->pwm, &pwm_args);
++
++	state.period = pwm_args.period;
+ 	state.duty_cycle = state.period/2;
++	dev_err(&pdev->dev, "state.period: %d state.duty_cycle: %d\n",
++			state.period,state.duty_cycle);
+ 	ret = pwm_apply_state(ctl->pwm, &state);
+ 	if (ret) {
+ 		dev_err(&pdev->dev, "failed to apply initial PWM state: %d\n",
+ 			ret);
+ 	}
++	pwm_enable(ctl->pwm);
+ 
+ 	ret = devm_add_action_or_reset(&pdev->dev, eswin_fan_control_remove, ctl);
+ 	if (ret)
+--- a/drivers/iommu/eswin/eswin-win2030-sid.c
++++ b/drivers/iommu/eswin/eswin-win2030-sid.c
+@@ -216,6 +216,53 @@ int win2030_aon_sid_cfg(struct device *d
+ }
+ EXPORT_SYMBOL(win2030_aon_sid_cfg);
+ 
++
++int win2030_dma_sid_cfg(struct device *dev)
++{
++	int ret;
++	struct regmap *regmap;
++	int hsp_mmu_dma_reg;
++	u32 rdwr_sid_ssid;
++	u32 sid;
++	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
++
++	/* not behind smmu, use the default reset value(0x0) of the reg as streamID*/
++	if (fwspec == NULL) {
++		dev_dbg(dev, "dev is not behind smmu, skip configuration of sid\n");
++		return 0;
++	}
++	sid = fwspec->ids[0];
++
++	regmap = syscon_regmap_lookup_by_phandle(dev->of_node, "eswin,hsp_sp_csr");
++	if (IS_ERR(regmap)) {
++		dev_dbg(dev, "No hsp_sp_csr phandle specified\n");
++		return 0;
++	}
++
++	ret = of_property_read_u32_index(dev->of_node, "eswin,hsp_sp_csr", 1,
++					&hsp_mmu_dma_reg);
++	if (ret) {
++		dev_err(dev, "can't get dma sid cfg reg offset (%d)\n", ret);
++		return ret;
++	}
++
++	/* make the reading sid the same as writing sid, ssid is fixed to zero */
++	rdwr_sid_ssid  = FIELD_PREP(AWSMMUSID, sid);
++	rdwr_sid_ssid |= FIELD_PREP(ARSMMUSID, sid);
++	rdwr_sid_ssid |= FIELD_PREP(AWSMMUSSID, 0);
++	rdwr_sid_ssid |= FIELD_PREP(ARSMMUSSID, 0);
++	regmap_write(regmap, hsp_mmu_dma_reg, rdwr_sid_ssid);
++
++	ret = win2030_dynm_sid_enable(dev_to_node(dev));
++	if (ret < 0)
++		dev_err(dev, "failed to config dma streamID(%d)!\n", sid);
++	else
++		dev_dbg(dev, "success to config dma streamID(%d)!\n", sid);
++
++	return ret;
++}
++EXPORT_SYMBOL(win2030_dma_sid_cfg);
++
+ static int of_parse_syscon_nodes(struct device_node *np, int *nid_p)
+ {
+ 	#ifdef CONFIG_NUMA
+--- a/drivers/pwm/Makefile
++++ b/drivers/pwm/Makefile
+@@ -16,7 +16,7 @@ obj-$(CONFIG_PWM_CLPS711X)	+= pwm-clps71
+ obj-$(CONFIG_PWM_CRC)		+= pwm-crc.o
+ obj-$(CONFIG_PWM_CROS_EC)	+= pwm-cros-ec.o
+ obj-$(CONFIG_PWM_DWC)		+= pwm-dwc.o
+-obj-$(CONFIG_PWM_ESWIN)		+= pwm-eswin.o
++obj-$(CONFIG_PWM_ESWIN)		+= pwm-dwc-eswin.o
+ obj-$(CONFIG_PWM_EP93XX)	+= pwm-ep93xx.o
+ obj-$(CONFIG_PWM_FSL_FTM)	+= pwm-fsl-ftm.o
+ obj-$(CONFIG_PWM_HIBVT)		+= pwm-hibvt.o
+--- /dev/null
++++ b/drivers/pwm/pwm-dwc-eswin.c
+@@ -0,0 +1,348 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * DesignWare PWM Controller driver
++ *
++ * Copyright (C) 2018-2020 Intel Corporation
++ *
++ * Author: Felipe Balbi (Intel)
++ * Author: Jarkko Nikula <jarkko.nikula@linux.intel.com>
++ * Author: Raymond Tan <raymond.tan@intel.com>
++ *
++ * Limitations:
++ * - The hardware cannot generate a 0 % or 100 % duty cycle. Both high and low
++ *   periods are one or more input clock periods long.
++ *
++ * Copyright 2024, Beijing ESWIN Computing Technology Co., Ltd.. All rights reserved.
++ * SPDX-License-Identifier: GPL-2.0
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, version 2.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Author: xuxiang@eswincomputing.com
++ */
++#include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/err.h>
++#include <linux/io.h>
++#include <linux/reset.h>
++#include <linux/platform_device.h>
++#include <linux/pm_runtime.h>
++#include <linux/pwm.h>
++
++#define DWC_TIM_LD_CNT(n)	((n) * 0x14)
++#define DWC_TIM_LD_CNT2(n)	(((n) * 4) + 0xb0)
++#define DWC_TIM_CUR_VAL(n)	(((n) * 0x14) + 0x04)
++#define DWC_TIM_CTRL(n)		(((n) * 0x14) + 0x08)
++#define DWC_TIM_EOI(n)		(((n) * 0x14) + 0x0c)
++#define DWC_TIM_INT_STS(n)	(((n) * 0x14) + 0x10)
++
++#define DWC_TIMERS_INT_STS	0xa0
++#define DWC_TIMERS_EOI		0xa4
++#define DWC_TIMERS_RAW_INT_STS	0xa8
++#define DWC_TIMERS_COMP_VERSION	0xac
++
++#define DWC_TIMERS_TOTAL	8
++#define DWC_CLK_PERIOD_NS	10
++
++/* Timer Control Register */
++#define DWC_TIM_CTRL_EN		BIT(0)
++#define DWC_TIM_CTRL_MODE	BIT(1)
++#define DWC_TIM_CTRL_MODE_FREE	(0 << 1)
++#define DWC_TIM_CTRL_MODE_USER	(1 << 1)
++#define DWC_TIM_CTRL_INT_MASK	BIT(2)
++#define DWC_TIM_CTRL_PWM	BIT(3)
++
++struct dwc_pwm_ctx {
++	u32 cnt;
++	u32 cnt2;
++	u32 ctrl;
++};
++
++struct dwc_pwm {
++	struct pwm_chip chip;
++	void __iomem *base;
++	struct clk *clk;
++	struct reset_control *rst;
++	struct dwc_pwm_ctx ctx[DWC_TIMERS_TOTAL];
++};
++#define to_dwc_pwm(p)	(container_of((p), struct dwc_pwm, chip))
++
++static inline u32 dwc_pwm_readl(struct dwc_pwm *dwc, u32 offset)
++{
++	return readl(dwc->base + offset);
++}
++
++static inline void dwc_pwm_writel(struct dwc_pwm *dwc, u32 value, u32 offset)
++{
++	writel(value, dwc->base + offset);
++}
++
++static void __dwc_pwm_set_enable(struct dwc_pwm *dwc, int pwm, int enabled)
++{
++	u32 reg;
++
++	reg = dwc_pwm_readl(dwc, DWC_TIM_CTRL(pwm));
++
++	if (enabled)
++		reg |= DWC_TIM_CTRL_EN;
++	else
++		reg &= ~DWC_TIM_CTRL_EN;
++
++	dwc_pwm_writel(dwc, reg, DWC_TIM_CTRL(pwm));
++}
++
++static int __dwc_pwm_configure_timer(struct dwc_pwm *dwc,
++				     struct pwm_device *pwm,
++				     const struct pwm_state *state)
++{
++	u64 tmp;
++	u32 ctrl;
++	u32 high;
++	u32 low;
++
++	/*
++	 * Calculate width of low and high period in terms of input clock
++	 * periods and check are the result within HW limits between 1 and
++	 * 2^32 periods.
++	 */
++	tmp = DIV_ROUND_CLOSEST_ULL(state->duty_cycle, DWC_CLK_PERIOD_NS);
++	if (tmp < 1 || tmp > (1ULL << 32))
++		return -ERANGE;
++	low = tmp - 1;
++
++	tmp = DIV_ROUND_CLOSEST_ULL(state->period - state->duty_cycle,
++				    DWC_CLK_PERIOD_NS);
++	if (tmp < 1 || tmp > (1ULL << 32))
++		return -ERANGE;
++	high = tmp - 1;
++
++	/*
++	 * Specification says timer usage flow is to disable timer, then
++	 * program it followed by enable. It also says Load Count is loaded
++	 * into timer after it is enabled - either after a disable or
++	 * a reset. Based on measurements it happens also without disable
++	 * whenever Load Count is updated. But follow the specification.
++	 */
++	__dwc_pwm_set_enable(dwc, pwm->hwpwm, false);
++
++	/*
++	 * Write Load Count and Load Count 2 registers. Former defines the
++	 * width of low period and latter the width of high period in terms
++	 * multiple of input clock periods:
++	 * Width = ((Count + 1) * input clock period).
++	 */
++	dwc_pwm_writel(dwc, low, DWC_TIM_LD_CNT(pwm->hwpwm));
++	dwc_pwm_writel(dwc, high, DWC_TIM_LD_CNT2(pwm->hwpwm));
++
++	/*
++	 * Set user-defined mode, timer reloads from Load Count registers
++	 * when it counts down to 0.
++	 * Set PWM mode, it makes output to toggle and width of low and high
++	 * periods are set by Load Count registers.
++	 */
++	ctrl = DWC_TIM_CTRL_MODE_USER | DWC_TIM_CTRL_PWM;
++	dwc_pwm_writel(dwc, ctrl, DWC_TIM_CTRL(pwm->hwpwm));
++
++	/*
++	 * Enable timer. Output starts from low period.
++	 */
++	__dwc_pwm_set_enable(dwc, pwm->hwpwm, state->enabled);
++
++	return 0;
++}
++
++static int dwc_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
++			 const struct pwm_state *state)
++{
++	struct dwc_pwm *dwc = to_dwc_pwm(chip);
++
++	if (state->polarity != PWM_POLARITY_INVERSED)
++		return -EINVAL;
++
++	if (state->enabled) {
++		if (!pwm->state.enabled)
++			pm_runtime_get_sync(chip->dev);
++		return __dwc_pwm_configure_timer(dwc, pwm, state);
++	} else {
++		if (pwm->state.enabled) {
++			__dwc_pwm_set_enable(dwc, pwm->hwpwm, false);
++			pm_runtime_put_sync(chip->dev);
++		}
++	}
++
++	return 0;
++}
++
++static int dwc_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
++			     struct pwm_state *state)
++{
++	struct dwc_pwm *dwc = to_dwc_pwm(chip);
++	u64 duty, period;
++
++	pm_runtime_get_sync(chip->dev);
++
++	state->enabled = !!(dwc_pwm_readl(dwc,
++				DWC_TIM_CTRL(pwm->hwpwm)) & DWC_TIM_CTRL_EN);
++
++	duty = dwc_pwm_readl(dwc, DWC_TIM_LD_CNT(pwm->hwpwm));
++	duty += 1;
++	duty *= DWC_CLK_PERIOD_NS;
++	state->duty_cycle = duty;
++
++	period = dwc_pwm_readl(dwc, DWC_TIM_LD_CNT2(pwm->hwpwm));
++	period += 1;
++	period *= DWC_CLK_PERIOD_NS;
++	period += duty;
++	state->period = period;
++
++	state->polarity = PWM_POLARITY_INVERSED;
++
++	pm_runtime_put_sync(chip->dev);
++
++	return 0;
++}
++
++static const struct pwm_ops dwc_pwm_ops = {
++	.apply = dwc_pwm_apply,
++	.get_state = dwc_pwm_get_state,
++	.owner = THIS_MODULE,
++};
++
++static struct dwc_pwm *dwc_pwm_alloc(struct device *dev)
++{
++	struct dwc_pwm *dwc;
++
++	dwc = devm_kzalloc(dev, sizeof(*dwc), GFP_KERNEL);
++	if (!dwc)
++		return NULL;
++
++	dwc->chip.dev = dev;
++	dwc->chip.ops = &dwc_pwm_ops;
++	dwc->chip.npwm = DWC_TIMERS_TOTAL;
++
++	dev_set_drvdata(dev, dwc);
++	return dwc;
++}
++
++static int dwc_pwm_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct dwc_pwm *dwc;
++	int ret;
++
++	dwc = dwc_pwm_alloc(dev);
++	if (!dwc)
++		return -ENOMEM;
++
++	dwc->base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(dwc->base))
++		return PTR_ERR(dwc->base);
++
++	dwc->clk = devm_clk_get(&pdev->dev, "pclk");
++	if (IS_ERR(dwc->clk))
++		return PTR_ERR(dwc->clk);
++
++	ret = clk_prepare_enable(dwc->clk);
++	if (ret < 0) {
++		dev_err(&pdev->dev, "failed to enable clock: %d\n", ret);
++		return ret;
++	}
++
++	dwc->rst = devm_reset_control_get_optional(&pdev->dev, "rst");
++	if (IS_ERR(dwc->rst))
++		return PTR_ERR(dwc->rst);
++
++	ret = reset_control_deassert(dwc->rst);
++	if (ret) {
++		dev_err(&pdev->dev, "failed to deasser reset: %d\n", ret);
++		return ret;
++	}
++
++
++	ret = devm_pwmchip_add(dev, &dwc->chip);
++	if (ret)
++		return ret;
++
++	pm_runtime_put(dev);
++	pm_runtime_allow(dev);
++
++	return 0;
++}
++
++static int dwc_pwm_remove(struct platform_device *pdev)
++{
++	struct dwc_pwm *dwc = platform_get_drvdata(pdev);
++	pwmchip_remove(&dwc->chip);
++	clk_disable_unprepare(dwc->clk);
++	reset_control_assert(dwc->rst);
++
++	return 0;
++}
++
++#ifdef CONFIG_PM_SLEEP
++static int dwc_pwm_suspend(struct device *dev)
++{
++	struct dwc_pwm *dwc = dev_get_drvdata(dev);
++	int i;
++
++	for (i = 0; i < DWC_TIMERS_TOTAL; i++) {
++		if (dwc->chip.pwms[i].state.enabled) {
++			dev_err(dev, "PWM %u in use by consumer (%s)\n",
++				i, dwc->chip.pwms[i].label);
++			return -EBUSY;
++		}
++		dwc->ctx[i].cnt = dwc_pwm_readl(dwc, DWC_TIM_LD_CNT(i));
++		dwc->ctx[i].cnt2 = dwc_pwm_readl(dwc, DWC_TIM_LD_CNT2(i));
++		dwc->ctx[i].ctrl = dwc_pwm_readl(dwc, DWC_TIM_CTRL(i));
++	}
++
++	return 0;
++}
++
++static int dwc_pwm_resume(struct device *dev)
++{
++	struct dwc_pwm *dwc = dev_get_drvdata(dev);
++	int i;
++
++	for (i = 0; i < DWC_TIMERS_TOTAL; i++) {
++		dwc_pwm_writel(dwc, dwc->ctx[i].cnt, DWC_TIM_LD_CNT(i));
++		dwc_pwm_writel(dwc, dwc->ctx[i].cnt2, DWC_TIM_LD_CNT2(i));
++		dwc_pwm_writel(dwc, dwc->ctx[i].ctrl, DWC_TIM_CTRL(i));
++	}
++
++	return 0;
++}
++#endif
++
++static SIMPLE_DEV_PM_OPS(dwc_pwm_pm_ops, dwc_pwm_suspend, dwc_pwm_resume);
++
++static const struct of_device_id dwc_pwm_id_table[] = {
++	{ .compatible = "eswin,pwm-eswin", },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, dwc_pwm_id_table);
++
++static struct platform_driver dwc_pwm_driver = {
++	.probe = dwc_pwm_probe,
++	.remove = dwc_pwm_remove,
++	.driver = {
++		.name	= "dwc-pwm",
++		.pm = &dwc_pwm_pm_ops,
++		.of_match_table = of_match_ptr(dwc_pwm_id_table),
++	},
++};
++
++module_platform_driver(dwc_pwm_driver);
++
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("xuxiang <xuxiang@eswincomputing.com>");
++MODULE_DESCRIPTION("DesignWare PWM Controller");
+--- a/drivers/pwm/pwm-eswin.c
++++ /dev/null
+@@ -1,370 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-/*
+- * ESWIN pwm driver
+- *
+- * Copyright 2024, Beijing ESWIN Computing Technology Co., Ltd.. All rights reserved.
+- * SPDX-License-Identifier: GPL-2.0
+- *
+- * This program is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, version 2.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+- *
+- * Author: zhangchunyun@eswincomputing.com
+- */
+-
+-#include <linux/bitops.h>
+-#include <linux/export.h>
+-#include <linux/kernel.h>
+-#include <linux/pm_runtime.h>
+-#include <linux/clk.h>
+-#include <linux/reset.h>
+-#include <linux/io.h>
+-#include <linux/module.h>
+-#include <linux/of.h>
+-#include <linux/of_device.h>
+-#include <linux/platform_device.h>
+-#include <linux/pwm.h>
+-#include <linux/time.h>
+-#include <linux/pinctrl/pinctrl.h>
+-#include <linux/pinctrl/pinmux.h>
+-#include <linux/pinctrl/pinconf.h>
+-#include <linux/pinctrl/pinconf-generic.h>
+-
+-#define ESWIN_TIM_LD_CNT(n)   ((n) * 0x14)
+-#define ESWIN_TIM_LD_CNT2(n)  (((n) * 4) + 0xb0)
+-#define ESWIN_TIM_CUR_VAL(n)  (((n) * 0x14) + 0x04)
+-#define ESWIN_TIM_CTRL(n)     (((n) * 0x14) + 0x08)
+-#define ESWIN_TIM_EOI(n)      (((n) * 0x14) + 0x0c)
+-#define ESWIN_TIM_INT_STS(n)  (((n) * 0x14) + 0x10)
+-
+-#define ESWIN_TIMERS_INT_STS  0xa0
+-#define ESWIN_TIMERS_EOI      0xa4
+-#define ESWIN_TIMERS_RAW_INT_STS  0xa8
+-#define ESWIN_TIMERS_COMP_VERSION 0xac
+-
+-#define ESWIN_TIMERS_TOTAL    8
+-#define NSEC_TO_SEC	1000000000
+-
+-/* Timer Control Register */
+-#define ESWIN_TIM_CTRL_EN     BIT(0)
+-#define ESWIN_TIM_CTRL_MODE   BIT(1)
+-#define ESWIN_TIM_CTRL_MODE_FREE  (0 << 1)
+-#define ESWIN_TIM_CTRL_MODE_USER  (1 << 1)
+-#define ESWIN_TIM_CTRL_INT_MASK   BIT(2)
+-#define ESWIN_TIM_CTRL_PWM    BIT(3)
+-
+-struct eswin_pwm_ctx {
+-	u32 cnt;
+-	u32 cnt2;
+-	u32 ctrl;
+-};
+-
+-struct eswin_pwm {
+-	struct pwm_chip chip;
+-	void __iomem *base;
+-	struct clk *clk;
+-	struct clk *pclk;
+-	struct eswin_pwm_ctx ctx[ESWIN_TIMERS_TOTAL];
+-	struct reset_control * pwm_rst;
+-	u32 clk_period_ns;
+-};
+-
+-#define to_eswin_pwm(p)   (container_of((p), struct eswin_pwm, chip))
+-
+-static inline u32 eswin_pwm_readl(struct eswin_pwm *eswin, u32 offset)
+-{
+-	return readl(eswin->base + offset);
+-}
+-
+-static inline void eswin_pwm_writel(struct eswin_pwm *eswin, u32 value, u32 offset)
+-{
+-	writel(value, eswin->base + offset);
+-}
+-
+-static void __eswin_pwm_set_enable(struct eswin_pwm *eswin, int pwm, int enabled)
+-{
+-	u32 reg;
+-
+-	reg = eswin_pwm_readl(eswin, ESWIN_TIM_CTRL(pwm));
+-
+-	if (enabled)
+-		reg |= ESWIN_TIM_CTRL_EN;
+-	else
+-		reg &= ~ESWIN_TIM_CTRL_EN;
+-
+-	eswin_pwm_writel(eswin, reg, ESWIN_TIM_CTRL(pwm));
+-	reg = eswin_pwm_readl(eswin, ESWIN_TIM_CTRL(pwm));
+-}
+-
+-static int __eswin_pwm_configure_timer(struct eswin_pwm *eswin,
+-       struct pwm_device *pwm,
+-       const struct pwm_state *state)
+-{
+-	u64 tmp;
+-	u32 ctrl;
+-	u32 high;
+-	u32 low;
+-
+-	/*
+-	¦* Calculate width of low and high period in terms of input clock
+-	¦* periods and check are the result within HW limits between 1 and
+-	¦* 2^32 periods.
+-	¦*/
+-
+-	tmp = DIV_ROUND_CLOSEST_ULL(state->duty_cycle, eswin->clk_period_ns);
+-	if (tmp < 1 || tmp > (1ULL << 32))
+-              return -ERANGE;
+-	high = tmp - 1;
+-
+-	tmp = DIV_ROUND_CLOSEST_ULL(state->period - state->duty_cycle,
+-         eswin->clk_period_ns);
+-	if (tmp < 1 || tmp > (1ULL << 32))
+-        return -ERANGE;
+-	low = tmp - 1;
+-	/*
+-	¦* Specification says timer usage flow is to disable timer, then
+-	¦* program it followed by enable. It also says Load Count is loaded
+-	¦* into timer after it is enabled - either after a disable or
+-	¦* a reset. Based on measurements it happens also without disable
+-	¦* whenever Load Count is updated. But follow the specification.
+-	¦*/
+-	__eswin_pwm_set_enable(eswin, pwm->hwpwm, false);
+-
+-	/*
+-	¦* Write Load Count and Load Count 2 registers. Former defines the
+-	¦* width of low period and latter the width of high period in terms
+-	¦* multiple of input clock periods:
+-	¦* Width = ((Count + 1) * input clock period).
+-	¦*/
+-	eswin_pwm_writel(eswin, low, ESWIN_TIM_LD_CNT(pwm->hwpwm));
+-	eswin_pwm_writel(eswin, high, ESWIN_TIM_LD_CNT2(pwm->hwpwm));
+-
+-	/*
+-	¦* Set user-defined mode, timer reloads from Load Count registers
+-	¦* when it counts down to 0.
+-	¦* Set PWM mode, it makes output to toggle and width of low and high
+-	¦* periods are set by Load Count registers.
+-	¦*/
+-	ctrl = ESWIN_TIM_CTRL_MODE_USER | ESWIN_TIM_CTRL_PWM;
+-	eswin_pwm_writel(eswin, ctrl, ESWIN_TIM_CTRL(pwm->hwpwm));
+-
+-	/*
+-	¦* Enable timer. Output starts from low period.
+-	¦*/
+-	__eswin_pwm_set_enable(eswin, pwm->hwpwm, state->enabled);
+-
+-	return 0;
+-}
+-
+-static int eswin_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
+-	const struct pwm_state *state)
+-{
+-	struct eswin_pwm *eswin = to_eswin_pwm(chip);
+-	struct pwm_state curstate;
+-	int ret = 0;
+-
+-	ret = clk_enable(eswin->pclk);
+-
+-	ret = clk_enable(eswin->clk);
+-
+-	pwm_get_state(pwm, &curstate);
+-
+-	__eswin_pwm_configure_timer(eswin, pwm, state);
+-
+-	return 0;
+-}
+-
+-static int eswin_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
+-	struct pwm_state *state)
+-{
+-	struct eswin_pwm *eswin = to_eswin_pwm(chip);
+-	u64 duty, period;
+-
+-	pm_runtime_get_sync(chip->dev);
+-
+-	state->enabled = !!(eswin_pwm_readl(eswin,
+-		ESWIN_TIM_CTRL(pwm->hwpwm)) & ESWIN_TIM_CTRL_EN);
+-
+-	duty = eswin_pwm_readl(eswin, ESWIN_TIM_LD_CNT(pwm->hwpwm));
+-	duty += 1;
+-	duty *= eswin->clk_period_ns;
+-	state->duty_cycle = duty;
+-
+-	period = eswin_pwm_readl(eswin, ESWIN_TIM_LD_CNT2(pwm->hwpwm));
+-	period += 1;
+-	period *= eswin->clk_period_ns;
+-	period += duty;
+-	state->period = period;
+-
+-	state->polarity = PWM_POLARITY_INVERSED;
+-
+-	pm_runtime_put_sync(chip->dev);
+-
+-	return 0;
+-}
+-
+-
+-static const struct pwm_ops eswin_pwm_ops = {
+-	.apply = eswin_pwm_apply,
+-	.get_state = eswin_pwm_get_state,
+-	.owner = THIS_MODULE,
+-};
+-
+-static const struct of_device_id eswin_pwm_dt_ids[] = {
+-	{ .compatible = "eswin,pwm-eswin", },
+-	{ /* sentinel */ }
+-};
+-MODULE_DEVICE_TABLE(of, eswin_pwm_dt_ids);
+-
+-static int eswin_pwm_probe(struct platform_device *pdev)
+-{
+-	struct eswin_pwm *pc;
+-	int ret, count;
+-	struct resource *res;
+-	int clk_rate;
+-/*	unsigned long *conf, *conf1, *conf2;
+-	unsigned int val, val1, val2;
+-
+-	ret = of_property_read_u32_index(pdev->dev.of_node, "pinctrl-pwm", 0, &val);
+-	if(ret){
+-		dev_err(&pdev->dev, "Can't get pwm pin0\n");
+-		return -1;
+-    }
+-
+-	ret = of_property_read_u32_index(pdev->dev.of_node, "pinctrl-pwm", 1, &val1);
+-	if(ret){
+-		dev_err(&pdev->dev, "Can't get pwm pin1\n");
+-		return -1;
+-    }
+-
+-	ret = of_property_read_u32_index(pdev->dev.of_node, "pinctrl-pwm", 2, &val2);
+-	if(ret){
+-		dev_err(&pdev->dev, "Can't get pwm pin2\n");
+-		return -1;
+-    }
+-	conf = (unsigned long *)(&val);
+-	conf1 = (unsigned long *)(&val1);
+-	conf2 = (unsigned long *)(&val2);
+-
+-	eswin_pinconf_cfg_set(NULL,147, conf,32);
+-	eswin_pinconf_cfg_set(NULL,116, conf1,32);
+-	eswin_pinconf_cfg_set(NULL,117, conf2,32);
+-*/
+-	pc = devm_kzalloc(&pdev->dev, sizeof(*pc), GFP_KERNEL);
+-	if (!pc)
+-		return -ENOMEM;
+-
+-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+-	if (!res)
+-		return -ENODEV;
+-
+-	pc->base = devm_ioremap_resource(&pdev->dev, res);
+-	if (IS_ERR(pc->base))
+-		return PTR_ERR(pc->base);
+-
+-	pc->clk = devm_clk_get(&pdev->dev, "pwm");
+-	if (IS_ERR(pc->clk)) {
+-		pc->clk = devm_clk_get(&pdev->dev, "pclk");
+-        if (IS_ERR(pc->clk))
+-			return dev_err_probe(&pdev->dev, PTR_ERR(pc->clk),
+-                    "Can't get PWM clk\n");
+-	}
+-
+-	count = of_count_phandle_with_args(pdev->dev.of_node,
+-                      "clocks", "#clock-cells");
+-	if (count == 2)
+-		pc->pclk = devm_clk_get(&pdev->dev, "pclk");
+-	else
+-		pc->pclk = pc->clk;
+-
+-	if (IS_ERR(pc->pclk)) {
+-		ret = PTR_ERR(pc->pclk);
+-		if (ret != -EPROBE_DEFER)
+-			dev_err(&pdev->dev, "Can't get APB clk: %d\n", ret);
+-		return ret;
+-	}
+-
+-	clk_rate = clk_get_rate(pc->pclk);
+-	pc->clk_period_ns = DIV_ROUND_CLOSEST_ULL(NSEC_TO_SEC, clk_rate);
+-    /* pwm reset init */
+-	pc->pwm_rst = devm_reset_control_get_optional(&pdev->dev, "pwmrst");
+-	if(IS_ERR_OR_NULL(pc->pwm_rst)) {
+-		dev_err(&pdev->dev, "Failed to get pwmrst reset handle\n");
+-		return -EFAULT;
+-	}
+-
+-	ret = clk_prepare_enable(pc->clk);
+-	if (ret) {
+-		dev_err(&pdev->dev, "Can't prepare enable PWM clk: %d\n", ret);
+-		return ret;
+-	}
+-
+-	ret = clk_prepare_enable(pc->pclk);
+-	if (ret) {
+-		dev_err(&pdev->dev, "Can't prepare enable APB clk: %d\n", ret);
+-		goto err_clk;
+-	}
+-
+-	/* reset pwm */
+-	ret = reset_control_assert(pc->pwm_rst);
+-	WARN_ON(0 != ret);
+-	ret = reset_control_deassert(pc->pwm_rst);
+-	WARN_ON(0 != ret);
+-
+-	platform_set_drvdata(pdev, pc);
+-
+-	pc->chip.dev = &pdev->dev;
+-	pc->chip.ops = &eswin_pwm_ops;
+-	pc->chip.npwm = 3;
+-
+-	ret = pwmchip_add(&pc->chip);
+-	if (ret < 0) {
+-		dev_err(&pdev->dev, "pwmchip_add() failed: %d\n", ret);
+-		goto err_pclk;
+-	}
+-	dev_err(&pdev->dev, "eswin pwm init success \n");
+-
+-	return 0;
+-
+-err_pclk:
+-    clk_disable_unprepare(pc->pclk);
+-err_clk:
+-    clk_disable_unprepare(pc->clk);
+-
+-	return ret;
+-}
+-
+-static int eswin_pwm_remove(struct platform_device *pdev)
+-{
+-	struct eswin_pwm *pc = platform_get_drvdata(pdev);
+-
+-	pwmchip_remove(&pc->chip);
+-
+-	clk_disable_unprepare(pc->pclk);
+-	clk_disable_unprepare(pc->clk);
+-
+-	return 0;
+-}
+-
+-static struct platform_driver eswin_pwm_driver = {
+-	.driver = {
+-	.name = "eswin-pwm",
+-	.of_match_table = eswin_pwm_dt_ids,
+-	},
+-	.probe = eswin_pwm_probe,
+-	.remove = eswin_pwm_remove,
+-};
+-module_platform_driver(eswin_pwm_driver);
+-
+-MODULE_DESCRIPTION("eswin SoC PWM driver");
+-MODULE_AUTHOR("zhangchunyun@eswincomputing.com");
+-MODULE_LICENSE("GPL");
+-
+--- a/include/linux/eswin-win2030-sid-cfg.h
++++ b/include/linux/eswin-win2030-sid-cfg.h
+@@ -3,6 +3,7 @@
+ 
+ int win2030_dynm_sid_enable(int nid);
+ int win2030_aon_sid_cfg(struct device *dev);
++int win2030_dma_sid_cfg(struct device *dev);
+ int win2030_tbu_power(struct device *dev, bool is_powerUp);
+ int win2030_tbu_power_by_dev_and_node(struct device *dev, struct device_node *node, bool is_powerUp);
+ 

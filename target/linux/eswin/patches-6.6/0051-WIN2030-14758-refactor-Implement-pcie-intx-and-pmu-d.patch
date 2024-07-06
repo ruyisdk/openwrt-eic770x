@@ -1,0 +1,541 @@
+From 5c0c6478c443761f2da0160a6484de36d3f133df Mon Sep 17 00:00:00 2001
+From: ningyu <ningyu@eswincomputing.com>
+Date: Thu, 13 Jun 2024 18:12:38 +0800
+Subject: [PATCH 51/68] WIN2030-14758:refactor:Implement pcie intx and pmu dtsi
+ config
+
+Changelogs:
+1. Implement pcie intx, optimize pcie driver
+2. Add pmu configuration in dtsi, in order to fully support perf operations, you need to add pmu nodes to uboot's dtsi
+3. Added support for pcie wifi rtl8191se
+
+Change-Id: I7c5d53891ee6ca8462bbd2350e892c340172e72c
+---
+ .../boot/dts/eswin/eswin-win2030-arch.dtsi    |  48 ++---
+ .../dts/eswin/eswin-win2030-die0-soc.dtsi     |  17 +-
+ arch/riscv/configs/win2030_defconfig          |  24 ++-
+ drivers/pci/controller/dwc/pcie-eswin.c       | 195 ++++--------------
+ 4 files changed, 80 insertions(+), 204 deletions(-)
+
+--- a/arch/riscv/boot/dts/eswin/eswin-win2030-arch.dtsi
++++ b/arch/riscv/boot/dts/eswin/eswin-win2030-arch.dtsi
+@@ -66,7 +66,7 @@
+ 			mmu-type = "riscv,sv48";
+ 			next-level-cache = <&L15>;
+ 			reg = <0x0>;
+-			riscv,isa = "rv64imafdc_zicsr_zifencei_zba_zbb";
++			riscv,isa = "rv64imafdc_zicsr_zifencei_zba_zbb_sscofpmf";
+ 			riscv,pmpgranularity = <4096>;
+ 			riscv,pmpregions = <8>;
+ 			sifive,buserror = <&L16>;
+@@ -80,10 +80,6 @@
+ 				compatible = "riscv,cpu-intc";
+ 				interrupt-controller;
+ 			};
+-			L13: pmu {
+-				compatible = "riscv,pmu0", "riscv,pmu";
+-				interrupts-extended = <&L14 13>;
+-			};
+ 		};
+ 		L22: cpu@1 {
+ 			clock-frequency = <0>;
+@@ -112,7 +108,7 @@
+ 			mmu-type = "riscv,sv48";
+ 			next-level-cache = <&L20>;
+ 			reg = <0x1>;
+-			riscv,isa = "rv64imafdc_zicsr_zifencei_zba_zbb";
++			riscv,isa = "rv64imafdc_zicsr_zifencei_zba_zbb_sscofpmf";
+ 			riscv,pmpgranularity = <4096>;
+ 			riscv,pmpregions = <8>;
+ 			sifive,buserror = <&L21>;
+@@ -126,10 +122,6 @@
+ 				compatible = "riscv,cpu-intc";
+ 				interrupt-controller;
+ 			};
+-			L18: pmu {
+-				compatible = "riscv,pmu0", "riscv,pmu";
+-				interrupts-extended = <&L19 13>;
+-			};
+ 		};
+ 		L27: cpu@2 {
+ 			clock-frequency = <0>;
+@@ -158,7 +150,7 @@
+ 			mmu-type = "riscv,sv48";
+ 			next-level-cache = <&L25>;
+ 			reg = <0x2>;
+-			riscv,isa = "rv64imafdc_zicsr_zifencei_zba_zbb";
++			riscv,isa = "rv64imafdc_zicsr_zifencei_zba_zbb_sscofpmf";
+ 			riscv,pmpgranularity = <4096>;
+ 			riscv,pmpregions = <8>;
+ 			sifive,buserror = <&L26>;
+@@ -172,10 +164,6 @@
+ 				compatible = "riscv,cpu-intc";
+ 				interrupt-controller;
+ 			};
+-			L23: pmu {
+-				compatible = "riscv,pmu0", "riscv,pmu";
+-				interrupts-extended = <&L24 13>;
+-			};
+ 		};
+ 		L32: cpu@3 {
+ 			clock-frequency = <0>;
+@@ -204,7 +192,7 @@
+ 			mmu-type = "riscv,sv48";
+ 			next-level-cache = <&L30>;
+ 			reg = <0x3>;
+-			riscv,isa = "rv64imafdc_zicsr_zifencei_zba_zbb";
++			riscv,isa = "rv64imafdc_zicsr_zifencei_zba_zbb_sscofpmf";
+ 			riscv,pmpgranularity = <4096>;
+ 			riscv,pmpregions = <8>;
+ 			sifive,buserror = <&L31>;
+@@ -218,10 +206,6 @@
+ 				compatible = "riscv,cpu-intc";
+ 				interrupt-controller;
+ 			};
+-			L28: pmu {
+-				compatible = "riscv,pmu0", "riscv,pmu";
+-				interrupts-extended = <&L29 13>;
+-			};
+ 		};
+ 	};
+ 	L50: memory@80000000 {
+@@ -235,6 +219,15 @@
+ 		#size-cells = <2>;
+ 		compatible = "SiFive,FU800-soc", "fu800-soc", "sifive-soc", "simple-bus";
+ 		ranges;
++		pmu {
++			riscv,raw-event-to-mhpmcounters = <0x0 0x0  0xffffffff 0xff          0x1f8
++											   0x0 0x1  0xffffffff 0xfff800ff    0x1f8
++											   0x0 0x2  0xffffffff 0xffffc0ff    0x1f8>;
++			riscv,event-to-mhpmcounters = <0x01 0x01 0x01 0x02 0x02 0x02 0x4 0x6 0x1f8 0x10009 0x10009 0x1f8 0x10019 0x10019 0x1f8 0x10021 0x10021 0x1f8>;
++			riscv,event-to-mhpmevent = <0x4 0x0 0x202 0x5 0x0 0x4000 0x6 0x0 0x2001 0x10009 0x0 0x102 0x10019 0x0 0x1002 0x10021 0x0 0x802>;
++			compatible = "riscv,pmu0", "riscv,pmu";
++			interrupts-extended = <&L14 13 &L19 13 &L24 13 &L29 13>;
++		};
+ 		L40: authentication-controller {
+ 			compatible = "sifive,authentication0";
+ 			sifive,auth-types = "fuse";
+@@ -320,14 +313,6 @@
+ 			sifive,perfmon-counters = <6>;
+ 			numa-node-id = <0>;
+ 		};
+-	/*
+-		L33: clint@2000000 {
+-			compatible = "riscv,clint0";
+-			interrupts-extended = <&L14 3 &L14 7 &L19 3 &L19 7 &L24 3 &L24 7 &L29 3 &L29 7>;
+-			reg = <0x0 0x2000000 0x0 0x10000>;
+-			reg-names = "control";
+-		};
+-	*/
+ 		L34: debug-controller@0 {
+ 			compatible = "sifive,debug-100", "riscv,debug-100";
+ 			debug-attach = "jtag";
+@@ -342,13 +327,6 @@
+ 			compatible = "sifive,error0";
+ 			reg = <0x0 0x10003000 0x0 0x1000>;
+ 		};
+-        /*
+-		L49: global-external-interrupts {
+-			compatible = "sifive,global-external-interrupts0";
+-			interrupt-parent = <&plic0>;
+-			interrupts = <5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 123 124 125 126 127 128 129 130 131 132 133 134 135 136 137 138 139 140 141 142 143 144 145 146 147 148 149 150 151 152 153 154 155 156 157 158 159 160 161 162 163 164 165 166 167 168 169 170 171 172 173 174 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191 192 193 194 195 196 197 198 199 200 201 202 203 204 205 206 207 208 209 210 211 212 213 214 215 216 217 218 219 220 221 222 223 224 225 226 227 228 229 230 231 232 233 234 235 236 237 238 239 240 241 242 243 244 245 246 247 248 249 250 251 252 253 254 255 256 257 258 259 260 261 262 263 264 265 266 267 268 269 270 271 272 273 274 275 276 277 278 279 280 281 282 283 284 285 286 287 288 289 290 291 292 293 294 295 296 297 298 299 300 301 302 303 304 305 306 307 308 309 310 311 312 313 314 315 316 317 318 319 320 321 322 323 324 325 326 327 328 329 330 331 332 333 334 335 336 337 338 339 340 341 342 343 344 345 346 347 348 349 350 351 352 353 354 355 356 357 358 359 360 361 362 363 364 365 366 367 368 369 370 371 372 373 374 375 376 377 378 379 380 381 382 383 384 385 386 387 388 389 390 391 392 393 394 395 396 397 398 399 400 401 402 403 404 405 406 407 408 409 410 411 412 413 414 415 416 417 418 419 420 421 422 423 424 425 426 427 428 429 430 431 432 433 434 435 436 437 438 439 440 441 442 443 444 445 446 447 448 449 450 451 452 453 454 455 456 457 458 459 460 461 462 463 464 465 466 467 468 469 470 471 472 473 474 475 476 477 478 479 480 481 482 483 484 485 486 487 488 489 490 491 492 493 494 495 496 497 498 499 500 501 502 503 504 505 506 507 508 509 510 511 512 513 514 515>;
+-		};
+-        */
+ 		plic0: interrupt-controller@c000000 {
+ 			#interrupt-cells = <1>;
+ 			compatible = "sifive,plic-1.0.0";
+--- a/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
++++ b/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
+@@ -784,22 +784,21 @@
+ 				 <0x82000000  0x0 0x41000000  0x0 0x41000000 0x0 0xf000000>,    /* mem */
+ 				 <0xc3000000 0x80 0x00000000 0x80 0x00000000 0x2 0x00000000>;  /* mem prefetchable */
+ 
+-			/* num-lanes = <0x4>; */
++			num-lanes = <0x4>;
+ 			/**********************************
+ 			  	msi_ctrl_io[0~31] : 188~219
+ 			  	msi_ctrl_int : 220
+ 			**********************************/
+-			interrupts = <220>;
+-			interrupt-names = "msi";
++			interrupts = <220>, <179>, <180>, <181>, <182>, <183>, <184>, <185>, <186>;
++			interrupt-names = "msi", "inta", "intb", "intc", "intd";
+ 			interrupt-parent = <&plic0>;
++			interrupt-map-mask = <0x0 0x0 0x0 0x7>;
++			interrupt-map = <0x0 0x0 0x0 0x1 &plic0 179>,
++							<0x0 0x0 0x0 0x2 &plic0 180>,
++							<0x0 0x0 0x0 0x3 &plic0 181>,
++							<0x0 0x0 0x0 0x4 &plic0 182>;
+ 			iommus = <&smmu0 0xfe0000>;
+ 			iommu-map = <0x0 &smmu0 0xff0000 0xffffff>;
+-			#ifdef PLATFORM_HAPS
+-			gen-x = <1>;
+-			#else
+-			gen-x = <3>;
+-			#endif
+-			lane-x = <4>;
+ 			tbus = <WIN2030_TBUID_PCIE>;
+ 			status = "disabled";
+ 			numa-node-id = <0>;
+--- a/arch/riscv/configs/win2030_defconfig
++++ b/arch/riscv/configs/win2030_defconfig
+@@ -49,6 +49,10 @@ CONFIG_NET_SCHED=y
+ CONFIG_NET_CLS_ACT=y
+ CONFIG_CFG80211=y
+ CONFIG_CFG80211_WEXT=y
++CONFIG_MAC80211=y
++CONFIG_RFKILL=y
++CONFIG_RFKILL_INPUT=y
++CONFIG_RFKILL_GPIO=y
+ CONFIG_PCI=y
+ CONFIG_PCIEPORTBUS=y
+ CONFIG_PCIEAER=y
+@@ -116,7 +120,25 @@ CONFIG_DWMAC_WIN2030=y
+ # CONFIG_NET_VENDOR_VIA is not set
+ # CONFIG_NET_VENDOR_WIZNET is not set
+ # CONFIG_NET_VENDOR_XILINX is not set
+-# CONFIG_WLAN is not set
++# CONFIG_WLAN_VENDOR_ADMTEK is not set
++# CONFIG_WLAN_VENDOR_ATH is not set
++# CONFIG_WLAN_VENDOR_ATMEL is not set
++# CONFIG_WLAN_VENDOR_BROADCOM is not set
++# CONFIG_WLAN_VENDOR_CISCO is not set
++# CONFIG_WLAN_VENDOR_INTEL is not set
++# CONFIG_WLAN_VENDOR_INTERSIL is not set
++# CONFIG_WLAN_VENDOR_MARVELL is not set
++# CONFIG_WLAN_VENDOR_MEDIATEK is not set
++# CONFIG_WLAN_VENDOR_MICROCHIP is not set
++# CONFIG_WLAN_VENDOR_PURELIFI is not set
++# CONFIG_WLAN_VENDOR_RALINK is not set
++CONFIG_RTL8192SE=m
++# CONFIG_WLAN_VENDOR_RSI is not set
++# CONFIG_WLAN_VENDOR_SILABS is not set
++# CONFIG_WLAN_VENDOR_ST is not set
++# CONFIG_WLAN_VENDOR_TI is not set
++# CONFIG_WLAN_VENDOR_ZYDAS is not set
++# CONFIG_WLAN_VENDOR_QUANTENNA is not set
+ CONFIG_INPUT_EVDEV=y
+ # CONFIG_INPUT_KEYBOARD is not set
+ # CONFIG_INPUT_MOUSE is not set
+--- a/drivers/pci/controller/dwc/pcie-eswin.c
++++ b/drivers/pci/controller/dwc/pcie-eswin.c
+@@ -40,26 +40,10 @@
+ #include <linux/property.h>
+ #include "pcie-designware.h"
+ 
+-#undef _IO_DEBUG_
+-
+-#ifdef _IO_DEBUG_
+-#define _writel_relaxed(v, p)	({ u32 __dbg_v; writel_relaxed(v, p); __dbg_v = readl_relaxed(p); printk("CFG 0x%lx : 0x%08x\n",p, __dbg_v); })
+-
+-// #define _io_read32(p)		({ u32 __dbg_v; __dbg_v = readl(p); printf("RD 0x%lx : 0x%08x\n",p, __dbg_v); __dbg_v; })
+-
+-#else
+-#define _writel_relaxed(v, p) 	writel_relaxed(v, p)
+-// #define _io_read32(p)		io_read32(p)
+-#endif
+-
+-#define to_eswin_pcie(x)	dev_get_drvdata((x)->dev)
+-
+ struct eswin_pcie {
+ 	struct dw_pcie pci;
+ 	void __iomem *mgmt_base;
+-	// void __iomem *sysmgt_base;
+ 	struct gpio_desc *reset;
+-	// struct gpio_desc *pwren;
+ 	struct clk *pcie_aux;
+ 	struct clk *pcie_cfg;
+ 	struct clk *pcie_cr;
+@@ -67,31 +51,26 @@ struct eswin_pcie {
+ 	struct reset_control *powerup_rst;
+ 	struct reset_control *cfg_rst;
+ 	struct reset_control *perst;
+-	int gen_x;
+-	int lane_x;
+ };
+ 
+-#define PCIEMGMT_ACLK_CTRL		0x170
+-#define PCIEMGMT_ACLK_CLKEN		BIT(31)
+-#define PCIEMGMT_XTAL_SEL		BIT(20)
+-#define PCIEMGMT_DIVSOR			0xf0
+-
+-#define PCIEMGMT_CFG_CTRL		0x174
+-#define PCIEMGMT_CFG_CLKEN		BIT(31)
+-#define PCIEMGMT_AUX_CLKEN		BIT(1)
+-#define PCIEMGMT_CR_CLKEN		BIT(0)
+-
+-#define PCIEMGMT_RST_CTRL		0x420
+-#define PCIEMGMT_PERST_N		BIT(2)
+-#define PCIEMGMT_POWERUP_RST_N	BIT(1)
+-#define PCIEMGMT_CFG_RST_N		BIT(0)
+-
+ #define PCIE_PM_SEL_AUX_CLK		BIT(16)
+-
+ #define PCIEMGMT_APP_HOLD_PHY_RST	BIT(6)
+ #define PCIEMGMT_APP_LTSSM_ENABLE	BIT(5)
+ #define PCIEMGMT_DEVICE_TYPE_MASK	0xf
+ 
++#define PCIEMGMT_CTRL0_OFFSET	0x0
++#define PCIEMGMT_STATUS0_OFFSET	0x100
++
++#define PCIE_TYPE_DEV_VEND_ID	0x0
++// #define PCIE_DSP_PF0_PM_CAP		0x40
++#define PCIE_DSP_PF0_MSI_CAP	0x50
++#define PCIE_NEXT_CAP_PTR		0x70
++#define DEVICE_CONTROL_DEVICE_STATUS	0x78
++// #define PCIE_DSP_PF0_MSIX_CAP	0xb0
++
++#define PCIE_MSI_MULTIPLE_MSG_32	(0x5<<17)
++#define PCIE_MSI_MULTIPLE_MSG_MASK	(0x7<<17)
++
+ #define PCIEMGMT_LINKUP_STATE_VALIDATE  ((0x11<<2)|0x3)
+ #define PCIEMGMT_LINKUP_STATE_MASK      0xff
+ 
+@@ -110,9 +89,9 @@ static int eswin_pcie_start_link(struct
+ 	u32 val;
+ 
+ 	/* Enable LTSSM */
+-	val = readl_relaxed(pcie->mgmt_base);
++	val = readl_relaxed(pcie->mgmt_base + PCIEMGMT_CTRL0_OFFSET);
+ 	val |= PCIEMGMT_APP_LTSSM_ENABLE;
+-	_writel_relaxed(val, pcie->mgmt_base);
++	writel_relaxed(val, pcie->mgmt_base + PCIEMGMT_CTRL0_OFFSET);
+ 	return 0;
+ }
+ 
+@@ -122,7 +101,7 @@ static int eswin_pcie_link_up(struct dw_
+ 	struct eswin_pcie *pcie = dev_get_drvdata(dev);
+ 	u32 val;
+ 
+-	val = readl_relaxed(pcie->mgmt_base + 0x100);
++	val = readl_relaxed(pcie->mgmt_base + PCIEMGMT_STATUS0_OFFSET);
+ 	if ((val & PCIEMGMT_LINKUP_STATE_MASK) == PCIEMGMT_LINKUP_STATE_VALIDATE)
+ 		return 1;
+ 	else
+@@ -172,7 +151,6 @@ static int eswin_pcie_clk_disable(struct
+ 
+ static int eswin_pcie_power_on(struct eswin_pcie *pcie)
+ {
+-	// struct device *dev = &pdev->dev;
+ 	int ret = 0;
+ 
+ 	/* pciet_cfg_rstn */
+@@ -183,10 +161,6 @@ static int eswin_pcie_power_on(struct es
+ 	ret = reset_control_reset(pcie->powerup_rst);
+ 	WARN_ON(0 != ret);
+ 
+-	/* pcie_perst_n */
+-	// ret = reset_control_reset(pcie->perst);
+-	// WARN_ON(0 != ret);
+-
+ 	return ret;
+ }
+ 
+@@ -201,12 +175,6 @@ static int eswin_pcie_power_off(struct e
+ 	return 0;
+ }
+ 
+-/*
+-	pinctrl-0 = <&pinctrl_gpio106_default &pinctrl_gpio9_default>;
+-	pci-socket-gpios = <&portd 10 GPIO_ACTIVE_LOW>;
+-	pci-prsnt-gpios = <&porta 9 GPIO_ACTIVE_LOW>;
+-*/
+-
+ int eswin_evb_socket_power_on(struct device *dev)
+ {
+ 	int err_desc=0;
+@@ -224,8 +192,6 @@ int eswin_evb_socket_power_on(struct dev
+ 	return err_desc;
+ }
+ 
+-/* Not use gpio9 which mux with JTAG1_TDI in EVB */
+-
+ int eswin_evb_device_scan(struct device *dev)
+ {
+ 	int err_desc=0;
+@@ -252,7 +218,7 @@ int eswin_evb_device_scan(struct device
+ static int eswin_pcie_host_init(struct dw_pcie_rp *pp)
+ {
+ 	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
+-	struct eswin_pcie *pcie = to_eswin_pcie(pci);
++	struct eswin_pcie *pcie = dev_get_drvdata(pci->dev);
+ 	int ret;
+ 	u32 val;
+ 
+@@ -275,9 +241,9 @@ static int eswin_pcie_host_init(struct d
+ 		return ret;
+ 
+ 	/* set device type : rc */
+-	val = readl_relaxed(pcie->mgmt_base);
++	val = readl_relaxed(pcie->mgmt_base + PCIEMGMT_CTRL0_OFFSET);
+ 	val &= 0xfffffff0;
+-	_writel_relaxed(val|0x4, pcie->mgmt_base);
++	writel_relaxed(val|0x4, pcie->mgmt_base + PCIEMGMT_CTRL0_OFFSET);
+ 
+ 	ret = reset_control_assert(pcie->perst);
+ 	WARN_ON(0 != ret);
+@@ -288,13 +254,13 @@ static int eswin_pcie_host_init(struct d
+ 	WARN_ON(0 != ret);
+ 
+ 	/* app_hold_phy_rst */
+-	val = readl_relaxed(pcie->mgmt_base);
++	val = readl_relaxed(pcie->mgmt_base + PCIEMGMT_CTRL0_OFFSET);
+ 	val &= ~(0x40);
+-	_writel_relaxed(val, pcie->mgmt_base);
++	writel_relaxed(val, pcie->mgmt_base + PCIEMGMT_CTRL0_OFFSET);
+ 
+ 	/* wait pm_sel_aux_clk to 0 */
+ 	while (1) {
+-		val = readl_relaxed(pcie->mgmt_base + 0x100);
++		val = readl_relaxed(pcie->mgmt_base + PCIEMGMT_STATUS0_OFFSET);
+ 		if (!(val & PCIE_PM_SEL_AUX_CLK)) {
+ 			break;
+ 		}
+@@ -302,110 +268,29 @@ static int eswin_pcie_host_init(struct d
+ 	}
+ 
+ 	/* config eswin vendor id and win2030 device id */
+-	dw_pcie_writel_dbi(pci, 0, 0x20301fe1);
+-
+-	if (pcie->gen_x == 3) {
+-		/* GEN3 */
+-		dw_pcie_writel_dbi(pci, 0xa0, 0x00010003);
+-
+-		/* GEN3 config , this config only for zebu*/
+-		// val = dw_pcie_readl_dbi(pci, 0x890);
+-		// val = 0x00012001;
+-		// dw_pcie_writel_dbi(pci, 0x890, val);
+-
+-		/* LINK_CAPABILITIES_REG : PCIE_CAP_BASE + 0xc */
+-		val = dw_pcie_readl_dbi(pci, 0x7c);
+-		val &= 0xfffffff0;
+-		/* GEN3 */
+-		val |= 0x3;
+-		dw_pcie_writel_dbi(pci, 0x7c, val);
+-	} else if (pcie->gen_x == 2) {
+-		/* GEN2 */
+-		dw_pcie_writel_dbi(pci, 0xa0, 0x00010002);
+-
+-		/* LINK_CAPABILITIES_REG : PCIE_CAP_BASE + 0xc */
+-		val = dw_pcie_readl_dbi(pci, 0x7c);
+-		val &= 0xfffffff0;
+-		val |= 0x2;
+-		dw_pcie_writel_dbi(pci, 0x7c, val);
+-	}else {
+-		/* GEN1 */
+-		dw_pcie_writel_dbi(pci, 0xa0, 0x00010001);
+-
+-		/* LINK_CAPABILITIES_REG : PCIE_CAP_BASE + 0xc */
+-		val = dw_pcie_readl_dbi(pci, 0x7c);
+-		val &= 0xfffffff0;
+-		val |= 0x1;
+-		dw_pcie_writel_dbi(pci, 0x7c, val);
+-	}
+-
+-	/* LINK_CAPABILITIES_REG : PCIE_CAP_BASE + 0xc : laneX */
+-	val = dw_pcie_readl_dbi(pci, 0x7c);
+-	val &= 0xfffffc0f;
+-	if (pcie->lane_x == 4) {
+-		val |= 0x40;
+-	} else if (pcie->lane_x == 2) {
+-		val |= 0x20;
+-	} else {
+-		val |= 0x10;
+-	}
+-
+-	dw_pcie_writel_dbi(pci, 0x7c, val);
++	dw_pcie_writel_dbi(pci, PCIE_TYPE_DEV_VEND_ID, 0x20301fe1);
+ 	
+ 	/* lane fix config, real driver NOT need, default x4 */
+-	val = dw_pcie_readl_dbi(pci, 0x8c0);
++	val = dw_pcie_readl_dbi(pci, PCIE_PORT_MULTI_LANE_CTRL);
+ 	val &= 0xffffff80;
+-	if (pcie->lane_x == 4) {
+-		val |= 0x44;
+-	} else if (pcie->lane_x == 2) {
+-		val |= 0x42;
+-	} else {
+-		val |= 0x41;
+-	}
+-	dw_pcie_writel_dbi(pci, 0x8c0, val);
+-
+-	/* config msix table size to 0 in RC mode because our RC not support msix */
+-	val = dw_pcie_readl_dbi(pci, 0xb0);
+-	val &= ~(0x7ff<<16);
+-	dw_pcie_writel_dbi(pci, 0xb0, val);
+-
+-	/* config max payload size to 4K */
+-	val = dw_pcie_readl_dbi(pci, 0x74);
+-	val &= ~(0x7);
+-	val |= 0x5;
+-	dw_pcie_writel_dbi(pci, 0x74, val);
++	val |= 0x44;
++	dw_pcie_writel_dbi(pci, PCIE_PORT_MULTI_LANE_CTRL, val);
+ 
+-	val = dw_pcie_readl_dbi(pci, 0x78);
++	val = dw_pcie_readl_dbi(pci, DEVICE_CONTROL_DEVICE_STATUS);
+ 	val &= ~(0x7<<5);
+-	val |= (0x5<<5);
+-	dw_pcie_writel_dbi(pci, 0x78, val);
+-
+-#if 0
+-	/* config GEN3_EQ_PSET_REQ_VEC */
+-	val = dw_pcie_readl_dbi(pci, 0x8a8);
+-	val &= ~(0xffff<<8);
+-	val |= (0x480<<8);
+-	dw_pcie_writel_dbi(pci, 0x8a8, val);
+-
+-	/* config preset from lane0 to lane3 */
+-	val = dw_pcie_readl_dbi(pci, 0x154);
+-	val &= 0xfff0fff0;
+-	val |= 0x70007;
+-	dw_pcie_writel_dbi(pci, 0x154, val);
+-
+-	val = dw_pcie_readl_dbi(pci, 0x158);
+-	val &= 0xfff0fff0;
+-	val |= 0x70007;
+-	dw_pcie_writel_dbi(pci, 0x158, val);
+-#endif
++	val |= (0x2<<5);
++	dw_pcie_writel_dbi(pci, DEVICE_CONTROL_DEVICE_STATUS, val);
+ 
+ 	/*  config support 32 msi vectors */
+-	dw_pcie_writel_dbi(pci, 0x50, 0x018a7005);
++	val = dw_pcie_readl_dbi(pci, PCIE_DSP_PF0_MSI_CAP);
++	val &= ~PCIE_MSI_MULTIPLE_MSG_MASK;
++	val |= PCIE_MSI_MULTIPLE_MSG_32;
++	dw_pcie_writel_dbi(pci, PCIE_DSP_PF0_MSI_CAP, val);
+ 
+ 	/* disable msix cap */
+-	val = dw_pcie_readl_dbi(pci, 0x70);
++	val = dw_pcie_readl_dbi(pci, PCIE_NEXT_CAP_PTR);
+ 	val &= 0xffff00ff;
+-	dw_pcie_writel_dbi(pci, 0x70, val);
++	dw_pcie_writel_dbi(pci, PCIE_NEXT_CAP_PTR, val);
+ 
+ 	return 0;
+ }
+@@ -451,12 +336,7 @@ static int eswin_pcie_probe(struct platf
+ 	if (IS_ERR(pcie->mgmt_base))
+ 		return PTR_ERR(pcie->mgmt_base);
+ 
+-	// /* Fetch GPIOs */
+-	// pcie->reset = devm_gpiod_get_optional(dev, "reset-gpios", GPIOD_OUT_LOW);
+-	// if (IS_ERR(pcie->reset))
+-	// 	return dev_err_probe(dev, PTR_ERR(pcie->reset), "unable to get reset-gpios\n");
+-
+-	// /* Fetch clocks */
++	/* Fetch clocks */
+ 	pcie->pcie_aux = devm_clk_get(dev, "pcie_aux_clk");
+ 	if (IS_ERR(pcie->pcie_aux)) {
+ 		dev_err(dev, "pcie_aux clock source missing or invalid\n");
+@@ -498,9 +378,6 @@ static int eswin_pcie_probe(struct platf
+ 		dev_err_probe(dev, PTR_ERR(pcie->perst), "unable to get perst\n");
+ 	}
+ 
+-	device_property_read_u32(&pdev->dev, "gen-x", &pcie->gen_x);
+-	device_property_read_u32(&pdev->dev, "lane-x", &pcie->lane_x);
+-
+ 	platform_set_drvdata(pdev, pcie);
+ 
+ 	return dw_pcie_host_init(&pci->pp);

@@ -1,0 +1,32 @@
+From 7c90c9e4b833cc8b84ea43e245e6c11411e9d50f Mon Sep 17 00:00:00 2001
+From: linmin <linmin@eswincomputing.com>
+Date: Thu, 23 May 2024 18:06:28 +0800
+Subject: [PATCH 23/68] WIN2030-14758:feat(cma heap):Select
+ CONFIG_DMABUF_HEAPS_CMA
+
+Changelogs:
+1.Select CONFIG_DMABUF_HEAPS_CMA in arch/riscv/configs/win2030_defconfig
+
+Change-Id: I5ceb9f8281230392f23754020ee4b1af69ca55c8
+---
+ arch/riscv/configs/win2030_defconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/arch/riscv/configs/win2030_defconfig
++++ b/arch/riscv/configs/win2030_defconfig
+@@ -180,7 +180,6 @@ CONFIG_SND_SOC=y
+ CONFIG_SND_SOC_SOF_TOPLEVEL=y
+ CONFIG_SND_SOC_SOF_OF=y
+ CONFIG_SND_ESWIN_DW_I2S=y
+-CONFIG_SND_SOC_HDMI_CODEC=y
+ CONFIG_ESWIN_SND_SOC_CODECS=y
+ CONFIG_ESWIN_SND_ES8388_CODEC=y
+ CONFIG_SND_SIMPLE_CARD=y
+@@ -249,6 +248,7 @@ CONFIG_DW_AXI_DMAC=y
+ CONFIG_DMATEST=y
+ CONFIG_DMABUF_HEAPS=y
+ CONFIG_DMABUF_HEAPS_SYSTEM=y
++CONFIG_DMABUF_HEAPS_CMA=y
+ CONFIG_VIRTIO_BALLOON=y
+ CONFIG_VIRTIO_INPUT=y
+ CONFIG_VIRTIO_MMIO=y

@@ -1,0 +1,27 @@
+From 3a333bcbc9a25c4e3f355506184cbb2e5b955157 Mon Sep 17 00:00:00 2001
+From: denglei <denglei@eswincomputing.com>
+Date: Thu, 20 Jun 2024 08:56:15 +0800
+Subject: [PATCH 57/68] WIN2030-15518:fix:Solving HDMI driver compilation
+ issue.
+
+Changelogs:
+	Solving HDMI driver compilation issue.
+
+Change-Id: Ic593ff87c2b648d9f06a590bca7a5c60babb1482
+---
+ drivers/gpu/drm/eswin/Kconfig | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+--- a/drivers/gpu/drm/eswin/Kconfig
++++ b/drivers/gpu/drm/eswin/Kconfig
+@@ -32,7 +32,9 @@ config ESWIN_DW_HDMI
+     bool "ESWIN specific extensions for Synopsys DW HDMI"
+     depends on DRM_ESWIN
+     select CEC_CORE if CEC_NOTIFIER
+-    select DW_HDMI
++    select DRM_DISPLAY_HDMI_HELPER
++    select DRM_DISPLAY_HELPER
++    select DRM_KMS_HELPER
+     help
+       This selects support for ESWIN SoC specific extensions
+       for the Synopsys DesignWare HDMI driver. If you want to

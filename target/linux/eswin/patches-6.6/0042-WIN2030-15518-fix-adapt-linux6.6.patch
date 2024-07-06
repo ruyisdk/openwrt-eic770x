@@ -1,0 +1,82 @@
+From 6a6871269a52f79e71d06e5bbef7490352b85c07 Mon Sep 17 00:00:00 2001
+From: yiguo <yiguo@eswincomputing.com>
+Date: Fri, 31 May 2024 17:23:52 +0800
+Subject: [PATCH 42/68] WIN2030-15518:fix:adapt linux6.6
+
+Changelogs:
+1. add dma-noncoherent; in dts.
+2. add func of start repeatly.
+3. add hdcp1x enable/disable.
+
+Change-Id: Ie0d29b96f66d5301e651cd9f7e5d46c0fa1ac22e
+---
+ arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi | 1 +
+ arch/riscv/boot/dts/eswin/eswin-win2030-die1-soc.dtsi | 1 +
+ drivers/gpu/drm/eswin/dw_hdmi_hdcp2.c                 | 7 +++----
+ 3 files changed, 5 insertions(+), 4 deletions(-)
+
+--- a/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
++++ b/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
+@@ -1905,6 +1905,7 @@
+ 				clocks = <&d0_clock WIN2030_CLK_VO_CFG_CLK>,
+ 					    <&d0_clock WIN2030_CLK_VO_HDMI_IESMCLK>;
+ 				clock-names ="pclk_hdcp2", "hdcp2_clk_hdmi";
++				dma-noncoherent;
+ 		};
+ 
+ 		d0_usbdrd3_0: usb0@50480000 {
+--- a/arch/riscv/boot/dts/eswin/eswin-win2030-die1-soc.dtsi
++++ b/arch/riscv/boot/dts/eswin/eswin-win2030-die1-soc.dtsi
+@@ -1836,6 +1836,7 @@
+             clocks = <&d1_clock WIN2030_CLK_VO_CFG_CLK>,
+                  <&d1_clock WIN2030_CLK_VO_HDMI_IESMCLK>;
+             clock-names ="pclk_hdcp2", "hdcp2_clk_hdmi";
++			dma-noncoherent;
+         };
+ 
+ 		d1_wdt0: watchdog@0x70800000 {
+--- a/drivers/gpu/drm/eswin/dw_hdmi_hdcp2.c
++++ b/drivers/gpu/drm/eswin/dw_hdmi_hdcp2.c
+@@ -61,6 +61,7 @@
+  */
+ 
+ #define MAX_HL_DEVICES 16
++#define TROOT_GRIFFIN
+ 
+ static bool randomize_mem = false;
+ module_param(randomize_mem, bool, 0);
+@@ -344,7 +345,6 @@ static int alloc_dma_areas(hl_device *hl
+ 		hl_dev->code_base = info->code_base;
+ 		hl_dev->code = phys_to_virt(hl_dev->code_base);
+ 	} else {
+-		dma_set_mask_and_coherent(g_dw_hdcp2->dev, DMA_BIT_MASK(32));
+ 		hl_dev->code =
+ 			dma_alloc_coherent(g_dw_hdcp2->dev, hl_dev->code_size,
+ 					   &hl_dev->code_base, GFP_KERNEL);
+@@ -387,7 +387,6 @@ static long init(struct file *f, void __
+ 
+ 	if (copy_from_user(&info, arg, sizeof info) != 0)
+ 		return -EFAULT;
+-
+ 	hl_dev = alloc_hl_dev_slot(&info);
+ 	if (!hl_dev)
+ 		return -EMFILE;
+@@ -528,9 +527,8 @@ static long hld_ioctl(struct file *f, un
+ static const struct file_operations hld_file_operations = {
+ #ifdef CONFIG_COMPAT
+ 	.compat_ioctl = hld_ioctl,
+-#else
+-	.unlocked_ioctl = hld_ioctl,
+ #endif
++	.unlocked_ioctl = hld_ioctl,
+ 	.owner = THIS_MODULE,
+ };
+ 
+@@ -708,6 +706,7 @@ static int eswin_hdmi_hdcp2_probe(struct
+ 	g_dw_hdcp2->start = dw_hdcp2_start;
+ 	hld_init();
+ 	dw_hdmi2_hdcp2_clk_enable(hdcp2_dev);
++	dma_set_mask_and_coherent(hdcp2_dev, DMA_BIT_MASK(32));
+ 	dw_hdmi_hdcp2_init(g_dw_hdcp2);
+ 	dw_hdmi_hdcp2_start(3);
+ 

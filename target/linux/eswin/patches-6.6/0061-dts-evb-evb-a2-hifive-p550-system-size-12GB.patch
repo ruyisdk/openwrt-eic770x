@@ -1,0 +1,128 @@
+From d6e8fa6f53aee323f20d4b325f75fc7b10a6e434 Mon Sep 17 00:00:00 2001
+From: Han Gao <gaohan@iscas.ac.cn>
+Date: Mon, 17 Jun 2024 21:49:29 +0800
+Subject: [PATCH 61/68] dts: evb & evb-a2 & hifive p550: system size 12GB
+
+Adjustt the system size from 4GB to 12GB, reserve 4GB for mmz
+
+Signed-off-by: Han Gao <gaohan@iscas.ac.cn>
+Signed-off-by: Han Gao <rabenda.cn@gmail.com>
+---
+ arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts  | 36 ++++++++++---------
+ arch/riscv/boot/dts/eswin/eic7700-evb.dts     | 36 ++++++++++---------
+ .../boot/dts/eswin/hifive-premier-550.dts     | 14 +++++---
+ 3 files changed, 49 insertions(+), 37 deletions(-)
+
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
+@@ -112,22 +112,26 @@
+ 			no-map;
+ 		};
+ 
+-		g2d_4GB_boundary_reserved_4k {
+-			no-map;
+-			reg = <0x0 0xfffff000 0x0 0x1000>;
+-		};
++                g2d_4GB_boundary_reserved_4k {
++                        no-map;
++                        reg = <0x0 0xfffff000 0x0 0x1000>;
++                };
+ 
+-		mmz_nid_0_part_0 {
+-			compatible = "eswin-reserve-memory";
+-			reg = <0x1 0x40000000 0x2 0x80000000>;
+-			no-map;
+-		};
++                g2d_8GB_boundary_reserved_4k {
++                        no-map;
++                        reg = <0x1 0xfffff000 0x0 0x1000>;
++                };
+ 
+-		mmz_nid_0_part_1 {
+-			compatible = "eswin-reserve-memory";
+-			reg = <0x3 0xc0000000 0x0 0x40000000>;
+-			no-map;
+-		};
++                g2d_12GB_boundary_reserved_4k {
++                        no-map;
++                        reg = <0x2 0xfffff000 0x0 0x1000>;
++                };
++
++                mmz_nid_0_part_0 {
++                        compatible = "eswin-reserve-memory";
++                        reg = <0x3 0x80000000 0x1 0x0>;
++                        no-map;
++                };
+ 	};
+ 
+ 	soc {
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb.dts
+@@ -111,22 +111,26 @@
+ 			no-map;
+ 		};
+ 
+-		g2d_4GB_boundary_reserved_4k {
+-			no-map;
+-			reg = <0x0 0xfffff000 0x0 0x1000>;
+-		};
++                g2d_4GB_boundary_reserved_4k {
++                        no-map;
++                        reg = <0x0 0xfffff000 0x0 0x1000>;
++                };
+ 
+-		mmz_nid_0_part_0 {
+-			compatible = "eswin-reserve-memory";
+-			reg = <0x1 0x40000000 0x2 0x80000000>;
+-			no-map;
+-		};
++                g2d_8GB_boundary_reserved_4k {
++                        no-map;
++                        reg = <0x1 0xfffff000 0x0 0x1000>;
++                };
+ 
+-		mmz_nid_0_part_1 {
+-			compatible = "eswin-reserve-memory";
+-			reg = <0x3 0xc0000000 0x0 0x40000000>;
+-			no-map;
+-		};
++                g2d_12GB_boundary_reserved_4k {
++                        no-map;
++                        reg = <0x2 0xfffff000 0x0 0x1000>;
++                };
++
++                mmz_nid_0_part_0 {
++                        compatible = "eswin-reserve-memory";
++                        reg = <0x3 0x80000000 0x1 0x0>;
++                        no-map;
++                };
+ 	};
+ 
+ 	soc {
+--- a/arch/riscv/boot/dts/eswin/hifive-premier-550.dts
++++ b/arch/riscv/boot/dts/eswin/hifive-premier-550.dts
+@@ -97,15 +97,19 @@
+ 			reg = <0x0 0xfffff000 0x0 0x1000>;
+ 		};
+ 
+-		mmz_nid_0_part_0 {
+-			compatible = "eswin-reserve-memory";
+-			reg = <0x1 0x40000000 0x2 0x80000000>;
++		g2d_8GB_boundary_reserved_4k {
++			no-map;
++			reg = <0x1 0xfffff000 0x0 0x1000>;
++		};
++
++		g2d_12GB_boundary_reserved_4k {
+ 			no-map;
++			reg = <0x2 0xfffff000 0x0 0x1000>;
+ 		};
+ 
+-		mmz_nid_0_part_1 {
++		mmz_nid_0_part_0 {
+ 			compatible = "eswin-reserve-memory";
+-			reg = <0x3 0xf0000000 0x0 0x10000000>;
++			reg = <0x3 0x80000000 0x1 0x0>;
+ 			no-map;
+ 		};
+ 	};

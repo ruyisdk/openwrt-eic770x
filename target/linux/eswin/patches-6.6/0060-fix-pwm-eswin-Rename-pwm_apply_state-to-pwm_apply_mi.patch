@@ -1,0 +1,43 @@
+From 183dbe01e659653e8a85833abda0fd738e3eb4e1 Mon Sep 17 00:00:00 2001
+From: Han Gao <gaohan@iscas.ac.cn>
+Date: Sat, 6 Jul 2024 20:04:55 +0800
+Subject: [PATCH 60/68] fix: pwm: eswin: Rename pwm_apply_state() to
+ pwm_apply_might_sleep()
+
+[ linux-6.6.y commit a10c3d5ff9a343c0b898215253750fedc38ac765 ]
+Link: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/commit/?id=a10c3d5ff9a343c0b898215253750fedc38ac765&h=linux-6.6.y
+
+Signed-off-by: Han Gao <gaohan@iscas.ac.cn>
+---
+ drivers/hwmon/eswin-fan-control.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+--- a/drivers/hwmon/eswin-fan-control.c
++++ b/drivers/hwmon/eswin-fan-control.c
+@@ -139,7 +139,7 @@ static ssize_t eswin_fan_pwm_ctl_store(s
+ 		dev_err(dev, "get error attr index 0x%x\n", attr->index);
+ 	}
+ 
+-	pwm_apply_state(ctl->pwm, &state);
++	pwm_apply_might_sleep(ctl->pwm, &state);
+ 
+ 	return count;
+ }
+@@ -240,7 +240,7 @@ static int eswin_fan_control_set_pwm_dut
+ 
+ 	pwm_get_state(ctl->pwm, &state);
+ 	pwm_set_relative_duty_cycle(&state, val, 100);
+-	pwm_apply_state(ctl->pwm, &state);
++	pwm_apply_might_sleep(ctl->pwm, &state);
+ 
+ 	return 0;
+ }
+@@ -513,7 +513,7 @@ static int eswin_fan_control_probe(struc
+ 	state.duty_cycle = state.period/2;
+ 	dev_err(&pdev->dev, "state.period: %d state.duty_cycle: %d\n",
+ 			state.period,state.duty_cycle);
+-	ret = pwm_apply_state(ctl->pwm, &state);
++	ret = pwm_apply_might_sleep(ctl->pwm, &state);
+ 	if (ret) {
+ 		dev_err(&pdev->dev, "failed to apply initial PWM state: %d\n",
+ 			ret);

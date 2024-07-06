@@ -1,0 +1,57 @@
+From 20eca103a3498fd5c8aaad2b524502729345c1d5 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E2=80=9Chuangyifeng=E2=80=9D?=
+ <huangyifeng@eswincomputing.com>
+Date: Fri, 31 May 2024 08:52:35 +0800
+Subject: [PATCH 41/68] WIN2030-15099: fix :distinguish built-in RTC and PCF
+ RTC
+
+Changelogs:
+      Setting aliases for the SoC built-in RTC and the PCF RTC, so
+      that the built-in RTC could be the default rtc
+
+Change-Id: Ib7dfa807f98e5497b40b75f4babfb098473c70e9
+---
+ arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts | 4 +++-
+ arch/riscv/boot/dts/eswin/eic7700-evb.dts    | 4 +++-
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
+@@ -47,6 +47,8 @@
+ 		serial0 = &d0_uart0;
+ 		ethernet0 = &d0_gmac0;
+ 		ethernet1 = &d0_gmac1;
++		rtc0 = &die0_rtc;
++		rtc1 = &pcf_rtc;
+ 	};
+ 
+ 	chosen {
+@@ -788,7 +790,7 @@
+ 	/* temp sensor & rtc */
+ 	status = "okay";
+ 	eswin,syscfg = <&d0_sys_con 0x3C0 16>;
+-	rtc@51 {
++	pcf_rtc:rtc@51 {
+ 		compatible = "nxp,pcf8563";
+ 		reg = <0x51>;
+ 	};
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb.dts
+@@ -46,6 +46,8 @@
+ 		serial0 = &d0_uart0;
+ 		ethernet0 = &d0_gmac0;
+ 		ethernet1 = &d0_gmac1;
++		rtc0 = &die0_rtc;
++		rtc1 = &pcf_rtc;
+ 	};
+ 
+ 	chosen {
+@@ -746,7 +748,7 @@
+ 	/* temp sensor & rtc */
+ 	status = "okay";
+ 	eswin,syscfg = <&d0_sys_con 0x3C0 16>;
+-	rtc@51 {
++	pcf_rtc:rtc@51 {
+ 		compatible = "nxp,pcf8563";
+ 		reg = <0x51>;
+ 	};

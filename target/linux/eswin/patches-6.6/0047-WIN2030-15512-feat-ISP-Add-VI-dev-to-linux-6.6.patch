@@ -1,0 +1,160 @@
+From d4e1a583bc1f513a7a2f8b15f082ea99a6ab4764 Mon Sep 17 00:00:00 2001
+From: lilijun <lilijun@eswincomputing.com>
+Date: Mon, 27 May 2024 16:19:01 +0800
+Subject: [PATCH 47/68] WIN2030-15512:feat(ISP): Add VI dev to linux 6.6
+
+Changelogs:
+1.Add csi,isp,i2... vi device nodes to evb&evb-a2
+
+Change-Id: If79682c7abde9e6922a946ace6ed57196ef35d67
+---
+ arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts         | 12 ++++++------
+ arch/riscv/boot/dts/eswin/eic7700-evb.dts            | 12 ++++++------
+ .../riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi | 10 +++++++---
+ arch/riscv/configs/win2030_defconfig                 |  1 +
+ 4 files changed, 20 insertions(+), 15 deletions(-)
+
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
+@@ -435,11 +435,11 @@
+ };
+ 
+ &isp_0 {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &isp_1 {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &dewarp {
+@@ -447,11 +447,11 @@
+ };
+ 
+ &mipi_dphy_rx {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &csi_dma0 {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &csi_dma1 {
+@@ -459,7 +459,7 @@
+ };
+ 
+ &csi2_0 {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &csi2_1 {
+@@ -745,7 +745,7 @@
+ 
+ &d0_i2c3 {
+ 	/* mipi csi0/csi1 */
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &d0_i2c4 {
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb.dts
+@@ -408,11 +408,11 @@
+ };
+ 
+ &isp_0 {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &isp_1 {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &dewarp {
+@@ -420,11 +420,11 @@
+ };
+ 
+ &mipi_dphy_rx {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &csi_dma0 {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &csi_dma1 {
+@@ -432,7 +432,7 @@
+ };
+ 
+ &csi2_0 {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &csi2_1 {
+@@ -702,7 +702,7 @@
+ 
+ &d0_i2c3 {
+ 	/* mipi csi0/csi1 */
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &d0_i2c4 {
+--- a/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
++++ b/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
+@@ -2025,12 +2025,14 @@
+ 			         <&d0_reset SHUTTER_RST_CTRL SW_VI_SHUTTER_RSTN_4>,
+ 			         <&d0_reset SHUTTER_RST_CTRL SW_VI_SHUTTER_RSTN_5>;
+ 			reset-names = "axi", "cfg", "isp0", "isp1", "dvp", "sht0", "sht1", "sht2", "sht3", "sht4", "sht5";
+-
++			interrupt-parent = <&plic0>;
++			interrupts = <368 369 370 371 372 373 374 375>;
+ 			id = <0>;
+ 			#size-cells = <2>;
+ 			reg = <0x0 0x51030000 0x0 0x10000>;
+ 		};
+ 
++
+ 		isp_0: isp@0x51000000 {
+ 			compatible = "esw,win2030-isp";
+ 
+@@ -2177,7 +2179,9 @@
+ 			port@2 {
+ 				reg = <2>;
+ 				csi2_dma_0_3: endpoint {
+-					bus-type = <5>;
++					bus-type = <4>;
++					clock-lanes = <0>;
++                                        data-lanes = <1 2>;
+ 					remote-endpoint = <&csi_dmar_0>;
+ 				};
+ 			};
+@@ -2222,7 +2226,7 @@
+ 			port@2 {
+ 				reg = <2>;
+ 				csi2_dma_1_3: endpoint {
+-					bus-type = <5>;
++					bus-type = <4>;
+ 					remote-endpoint = <&csi_dmar_1>;
+ 				};
+ 			};
+--- a/arch/riscv/configs/win2030_defconfig
++++ b/arch/riscv/configs/win2030_defconfig
+@@ -159,6 +159,7 @@ CONFIG_REGULATOR_MPQ8785=y
+ # CONFIG_MEDIA_CEC_SUPPORT is not set
+ CONFIG_MEDIA_SUPPORT=y
+ CONFIG_V4L_PLATFORM_DRIVERS=y
++CONFIG_VIDEO_XILINX=y
+ CONFIG_DRM=y
+ # CONFIG_DRM_I2C_CH7006 is not set
+ # CONFIG_DRM_I2C_SIL164 is not set

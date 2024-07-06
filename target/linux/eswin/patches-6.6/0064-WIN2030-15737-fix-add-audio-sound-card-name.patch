@@ -1,0 +1,75 @@
+From b48809feb10cbd73cd3559891815b49c910d5979 Mon Sep 17 00:00:00 2001
+From: denglei <denglei@eswincomputing.com>
+Date: Tue, 2 Jul 2024 14:38:07 +0800
+Subject: [PATCH 64/68] WIN2030-15737:fix:add audio sound card name.
+
+Changelogs:
+	add audio sound card name.
+
+Change-Id: I2febc01fee7d99053f1a072c7f98134db6aae0ce
+---
+ arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts     | 3 +++
+ arch/riscv/boot/dts/eswin/eic7700-evb.dts        | 3 +++
+ arch/riscv/boot/dts/eswin/hifive-premier-550.dts | 2 ++
+ 3 files changed, 8 insertions(+)
+
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
+@@ -425,16 +425,19 @@
+ 
+ &d0_graphcard0 {
+ 	status = "okay";
++	label = "Analog Audio-0";
+ 	dais = <&d0_i2s1_port>;
+ };
+ 
+ &d0_graphcard1 {
+ 	status = "okay";
++	label = "Analog Audio-1";
+ 	dais = <&d0_i2s2_port>;
+ };
+ 
+ &d0_graphcard2 {
+ 	status = "okay";
++	label = "HDMI Audio";
+ 	dais = <&d0_i2s0_port>;
+ };
+ 
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb.dts
+@@ -398,16 +398,19 @@
+ 
+ &d0_graphcard0 {
+ 	status = "okay";
++	label = "Analog Audio-0";
+ 	dais = <&d0_i2s1_port>;
+ };
+ 
+ &d0_graphcard1 {
+ 	status = "okay";
++	label = "Analog Audio-1";
+ 	dais = <&d0_i2s2_port>;
+ };
+ 
+ &d0_graphcard2 {
+ 	status = "okay";
++	label = "HDMI Audio";
+ 	dais = <&d0_i2s0_port0>, <&d0_i2s0_port1>;
+ };
+ 
+--- a/arch/riscv/boot/dts/eswin/hifive-premier-550.dts
++++ b/arch/riscv/boot/dts/eswin/hifive-premier-550.dts
+@@ -360,11 +360,13 @@
+ 
+ &d0_graphcard0 {
+ 	status = "okay";
++	label = "Analog Audio";
+ 	dais = <&d0_i2s1_port>;
+ };
+ 
+ &d0_graphcard1 {
+ 	status = "okay";
++	label = "HDMI Audio";
+ 	dais = <&d0_i2s0_port>;
+ };
+ 

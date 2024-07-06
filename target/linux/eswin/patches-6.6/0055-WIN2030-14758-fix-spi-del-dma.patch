@@ -1,0 +1,60 @@
+From 3ff9ac3ed66ec83820b9d62114ae3d9396232332 Mon Sep 17 00:00:00 2001
+From: xuxiang <xuxiang@eswincomputing.com>
+Date: Fri, 14 Jun 2024 14:54:27 +0800
+Subject: [PATCH 55/68] WIN2030-14758: fix:spi del dma
+
+Changelogs:
+1. spi delete dma
+
+Change-Id: I4de52eeb0111b3e591d164a040fd748acd88c930
+---
+ arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi | 6 ------
+ arch/riscv/boot/dts/eswin/eswin-win2030-die1-soc.dtsi | 3 ---
+ drivers/spi/spi-dw-mmio.c                             | 2 +-
+ 3 files changed, 1 insertion(+), 10 deletions(-)
+
+--- a/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
++++ b/arch/riscv/boot/dts/eswin/eswin-win2030-die0-soc.dtsi
+@@ -817,9 +817,6 @@
+ 			interrupts = <91>;
+ 			resets = <&d0_reset SSI_RST_CTRL SW_SSI_RST_N_0>;
+ 			reset-names = "spi";
+-			eswin,spi_dma = <&d0_aon_dmac>;
+-			dmas = <&d0_aon_dmac 38 3>, <&d0_aon_dmac 39 3>;
+-			dma-names = "rx", "tx";
+ 			numa-node-id = <0>;
+ 			status = "disabled";
+ 			dma-noncoherent;
+@@ -837,9 +834,6 @@
+ 			interrupts = <92>;
+ 			resets = <&d0_reset SSI_RST_CTRL SW_SSI_RST_N_1>;
+ 			reset-names = "spi";
+-			eswin,spi_dma = <&d0_aon_dmac>;
+-			dmas = <&d0_aon_dmac 36 4>, <&d0_aon_dmac 37 4>;
+-			dma-names = "rx", "tx";
+ 			numa-node-id = <0>;
+ 			status = "disabled";
+ 			dma-noncoherent;
+--- a/arch/riscv/boot/dts/eswin/eswin-win2030-die1-soc.dtsi
++++ b/arch/riscv/boot/dts/eswin/eswin-win2030-die1-soc.dtsi
+@@ -1589,9 +1589,6 @@
+ 			interrupts = <91>;
+ 			resets = <&d1_reset SSI_RST_CTRL SW_SSI_RST_N_0>;
+ 			reset-names = "spi";
+-			eswin,spi_dma = <&d1_aon_dmac>;
+-			dmas = <&d1_aon_dmac 38 3>, <&d1_aon_dmac 39 3>;
+-			dma-names = "rx", "tx";
+ 			numa-node-id = <1>;
+ 			status = "disabled";
+ 			dma-noncoherent;
+--- a/drivers/spi/spi-dw-mmio.c
++++ b/drivers/spi/spi-dw-mmio.c
+@@ -440,7 +440,7 @@ static const struct of_device_id dw_spi_
+ 	{ .compatible = "microchip,sparx5-spi", dw_spi_mscc_sparx5_init},
+ 	{ .compatible = "canaan,k210-spi", dw_spi_canaan_k210_init},
+ 	{ .compatible = "amd,pensando-elba-spi", .data = dw_spi_elba_init},
+-	{ .compatible = "snps,eic770x-spi", .data = dw_spi_eswin_init},
++	{ .compatible = "snps,eic770x-spi",},
+ 	{ /* end of table */}
+ };
+ MODULE_DEVICE_TABLE(of, dw_spi_mmio_of_match);

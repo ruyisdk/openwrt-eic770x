@@ -1,0 +1,818 @@
+From 336321e0fa46e72d9d2f7c810c81e53a3b839976 Mon Sep 17 00:00:00 2001
+From: donghuawei <donghuawei@eswincomputing.com>
+Date: Fri, 24 May 2024 13:59:55 +0800
+Subject: [PATCH 32/68] WIN2030-14758:refactor:khandle, dsp subsys drv
+
+Changelogs:
+    adaptor khandle, dsp subsys drv for linux-6.6
+
+Change-Id: I1df201939a96729991fa82e9c74a1550704037dd
+---
+ drivers/soc/Kconfig                  |   1 +
+ drivers/soc/Makefile                 |   1 +
+ drivers/soc/eswin/Kconfig            |  20 ++
+ drivers/soc/eswin/Makefile           |   4 +
+ drivers/soc/eswin/dsp_subsys.c       | 348 +++++++++++++++++++++++++++
+ drivers/soc/eswin/eswin-dsp-subsys.h |  44 ++++
+ drivers/soc/eswin/eswin-khandle.c    | 242 +++++++++++++++++++
+ drivers/soc/eswin/eswin-khandle.h    |  84 +++++++
+ drivers/soc/eswin/eswin_timer.h      |   6 +
+ 9 files changed, 750 insertions(+)
+ create mode 100644 drivers/soc/eswin/Kconfig
+ create mode 100644 drivers/soc/eswin/Makefile
+ create mode 100644 drivers/soc/eswin/dsp_subsys.c
+ create mode 100644 drivers/soc/eswin/eswin-dsp-subsys.h
+ create mode 100644 drivers/soc/eswin/eswin-khandle.c
+ create mode 100644 drivers/soc/eswin/eswin-khandle.h
+ create mode 100644 drivers/soc/eswin/eswin_timer.h
+
+--- a/drivers/soc/Kconfig
++++ b/drivers/soc/Kconfig
+@@ -24,6 +24,7 @@ source "drivers/soc/renesas/Kconfig"
+ source "drivers/soc/rockchip/Kconfig"
+ source "drivers/soc/samsung/Kconfig"
+ source "drivers/soc/sifive/Kconfig"
++source "drivers/soc/eswin/Kconfig"
+ source "drivers/soc/starfive/Kconfig"
+ source "drivers/soc/sunxi/Kconfig"
+ source "drivers/soc/tegra/Kconfig"
+--- a/drivers/soc/Makefile
++++ b/drivers/soc/Makefile
+@@ -29,6 +29,7 @@ obj-y				+= renesas/
+ obj-y				+= rockchip/
+ obj-$(CONFIG_SOC_SAMSUNG)	+= samsung/
+ obj-y				+= sifive/
++obj-y				+= eswin/
+ obj-y				+= sunxi/
+ obj-$(CONFIG_ARCH_TEGRA)	+= tegra/
+ obj-y				+= ti/
+--- /dev/null
++++ b/drivers/soc/eswin/Kconfig
+@@ -0,0 +1,20 @@
++if SOC_SIFIVE || SOC_STARFIVE
++
++config ESWIN_KHANDLE
++    bool "eswin kernel khandle functions"
++    default y
++    help
++        eswin realize this khandle, and mainly use for user process resource
++        mangement.
++
++config ESWIN_DSP_SUBSYS
++    tristate "Eswin dsp subsys"
++    default y
++    help
++      This is hardware-specific DSP subsys kernel driver for the eswin
++      hardware. It should be enabled to support dsp on eswin
++      platform.
++
++      If unsure, say N.
++
++endif
+--- /dev/null
++++ b/drivers/soc/eswin/Makefile
+@@ -0,0 +1,4 @@
++obj-$(CONFIG_ESWIN_KHANDLE) += eswin-khandle.o
++obj-$(CONFIG_ESWIN_DSP_SUBSYS) += dsp_subsys.o
++
++
+--- /dev/null
++++ b/drivers/soc/eswin/dsp_subsys.c
+@@ -0,0 +1,348 @@
++/*
++ * Program's name, and a brief idea of what it does（One line）.
++ * Copyright 20XX, Beijing ESWIN Computing Technology Co., Ltd.. All rights reserved.
++ * SPDX-License-Identifier: GPL-2.0-only
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, version 2.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of_address.h>
++#include <linux/of_device.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++#include <linux/reset.h>
++#include <linux/clk.h>
++#include <linux/win2030_noc.h>
++#include <dt-bindings/interconnect/eswin,win2030.h>
++#include "eswin-dsp-subsys.h"
++
++#define DRIVER_NAME "eswin-dsp-subsys"
++
++/**
++ * dsp_subsys_status - query the dsp subsys transaction status
++ *
++ * @void
++ *
++ * return: module transaction status on success , 1 if idle, 0 if busy.
++ *	negative for error
++ *	if can't get idle status in 3 seconds, return current status.
++ */
++static int dsp_subsys_status(void)
++{
++	unsigned long deadline = jiffies + 3 * HZ;
++	int status = 0;
++
++	do {
++		status = win2030_noc_sideband_mgr_query(SBM_DSPT_SNOC);
++		status |= win2030_noc_sideband_mgr_query(SBM_CNOC_DSPT);
++		if (0 != status) {
++			break;
++		}
++		schedule();
++	} while (time_before(jiffies, deadline));
++
++	return status;
++}
++
++static inline int dsp_subsys_clk_init(struct platform_device *pdev,
++									  struct es_dsp_subsys *subsys)
++{
++	int ret;
++
++	subsys->cfg_clk = devm_clk_get(&pdev->dev, "cfg_clk");
++	if (IS_ERR(subsys->cfg_clk)) {
++		ret = PTR_ERR(subsys->cfg_clk);
++		dev_err(&pdev->dev, "failed to get cfg_clk: %d\n", ret);
++		return ret;
++	}
++	return 0;
++}
++
++static int dsp_subsys_reset(struct es_dsp_subsys *subsys)
++{
++	int ret;
++
++	/*reset dsp bus*/
++	ret = reset_control_reset(subsys->rstc_axi);
++	WARN_ON(0 != ret);
++
++	ret = reset_control_reset(subsys->rstc_div4);
++	WARN_ON(0 != ret);
++
++	/*reset dsp cfg*/
++	ret = reset_control_reset(subsys->rstc_cfg);
++	WARN_ON(0 != ret);
++
++	/*reset dsp core clk div*/
++	ret = reset_control_reset(subsys->rstc_div_0);
++	WARN_ON(0 != ret);
++
++	ret = reset_control_reset(subsys->rstc_div_1);
++	WARN_ON(0 != ret);
++
++	ret = reset_control_reset(subsys->rstc_div_2);
++	WARN_ON(0 != ret);
++
++	ret = reset_control_reset(subsys->rstc_div_3);
++	WARN_ON(0 != ret);
++
++	return 0;
++}
++
++static int dsp_subsys_clk_enable(struct es_dsp_subsys *subsys)
++{
++	int ret;
++
++	ret = clk_prepare_enable(subsys->cfg_clk);
++	if (ret) {
++		dev_err(&subsys->pdev->dev, "failed to enable cfg_clk: %d\n", ret);
++		return ret;
++	}
++	return 0;
++}
++
++static int dsp_subsys_reset_init(struct platform_device *pdev,
++								 struct es_dsp_subsys *subsys)
++{
++	subsys->rstc_axi = devm_reset_control_get_optional(&pdev->dev, "axi");
++	if (IS_ERR_OR_NULL(subsys->rstc_axi)) {
++		dev_err(&subsys->pdev->dev, "Failed to get axi reset handle\n");
++		return -EFAULT;
++	}
++
++	subsys->rstc_div4 = devm_reset_control_get_optional(&pdev->dev, "div4");
++	if (IS_ERR_OR_NULL(subsys->rstc_div4)) {
++		dev_err(&subsys->pdev->dev, "Failed to div4 reset handle\n");
++		return -EFAULT;
++	}
++
++	subsys->rstc_cfg = devm_reset_control_get_optional(&pdev->dev, "cfg");
++	if (IS_ERR_OR_NULL(subsys->rstc_cfg)) {
++		dev_err(&subsys->pdev->dev, "Failed to get cfg reset handle\n");
++		return -EFAULT;
++	}
++
++	subsys->rstc_div_0 = devm_reset_control_get_optional(&pdev->dev, "div_0");
++	if (IS_ERR_OR_NULL(subsys->rstc_div_0)) {
++		dev_err(&subsys->pdev->dev, "Failed to div_0 reset handle\n");
++		return -EFAULT;
++	}
++	subsys->rstc_div_1 = devm_reset_control_get_optional(&pdev->dev, "div_1");
++	if (IS_ERR_OR_NULL(subsys->rstc_div_1)) {
++		dev_err(&subsys->pdev->dev, "Failed to div_1 reset handle\n");
++		return -EFAULT;
++	}
++	subsys->rstc_div_2 = devm_reset_control_get_optional(&pdev->dev, "div_2");
++	if (IS_ERR_OR_NULL(subsys->rstc_div_2)) {
++		dev_err(&subsys->pdev->dev, "Failed to div_2 reset handle\n");
++		return -EFAULT;
++	}
++	subsys->rstc_div_3 = devm_reset_control_get_optional(&pdev->dev, "div_3");
++	if (IS_ERR_OR_NULL(subsys->rstc_div_3)) {
++		dev_err(&subsys->pdev->dev, "Failed to div_3 reset handle\n");
++		return -EFAULT;
++	}
++	return 0;
++}
++
++static int dsp_subsys_reg_read(void *context, unsigned int reg,
++							   unsigned int *val)
++{
++	struct es_dsp_subsys *subsys = context;
++
++	*val = readl_relaxed(subsys->reg_base + reg);
++	return 0;
++}
++
++static int dsp_subsys_reg_write(void *context, unsigned int reg,
++								unsigned int val)
++{
++	struct es_dsp_subsys *subsys = context;
++
++	writel_relaxed(val, subsys->reg_base + reg);
++	return 0;
++}
++
++static int dsp_subsys_con_reg_read(void *context, unsigned int reg,
++								   unsigned int *val)
++{
++	struct es_dsp_subsys *subsys = context;
++
++	*val = readl_relaxed(subsys->con_reg_base + reg);
++	return 0;
++}
++
++static int dsp_subsys_con_reg_write(void *context, unsigned int reg,
++									unsigned int val)
++{
++	struct es_dsp_subsys *subsys = context;
++
++	writel_relaxed(val, subsys->con_reg_base + reg);
++	return 0;
++}
++
++/**
++ * dsp_subsys_init_regmap() - Initialize registers map
++ *
++ * Autodetects needed register access mode and creates the regmap with
++ * corresponding read/write callbacks. This must be called before doing any
++ * other register access.
++ */
++static int dsp_subsys_init_regmap(struct es_dsp_subsys *subsys)
++{
++	struct regmap_config map_cfg = {
++		.reg_bits = 32,
++		.val_bits = 32,
++		.reg_stride = 4,
++		.use_hwlock = true,
++		.cache_type = REGCACHE_NONE,
++		.can_sleep = false,
++		.reg_read = dsp_subsys_reg_read,
++		.reg_write = dsp_subsys_reg_write,
++	};
++	struct regmap_config con_map_cfg = {
++		.reg_bits = 32,
++		.val_bits = 32,
++		.reg_stride = 4,
++		.use_hwlock = true,
++		.cache_type = REGCACHE_NONE,
++		.can_sleep = false,
++		.reg_read = dsp_subsys_con_reg_read,
++		.reg_write = dsp_subsys_con_reg_write,
++	};
++
++	/*
++	 * Note we'll check the return value of the regmap IO accessors only
++	 * at the probe stage. The rest of the code won't do this because
++	 * basically we have MMIO-based regmap so non of the read/write methods
++	 * can fail.
++	 */
++	subsys->map = devm_regmap_init(&subsys->pdev->dev, NULL, subsys, &map_cfg);
++	if (IS_ERR(subsys->map)) {
++		dev_err(&subsys->pdev->dev, "Failed to init the registers map\n");
++		return PTR_ERR(subsys->map);
++	}
++
++	subsys->con_map = devm_regmap_init(&subsys->pdev->dev, NULL, subsys, &con_map_cfg);
++	if (IS_ERR(subsys->con_map)) {
++		dev_err(&subsys->pdev->dev, "Failed to init the con registers map\n");
++		return PTR_ERR(subsys->con_map);
++	}
++
++	return 0;
++}
++
++static int es_dsp_subsys_probe(struct platform_device *pdev)
++{
++	struct es_dsp_subsys *subsys;
++	int ret;
++	struct resource *res;
++
++	dev_info(&pdev->dev, "%s\n", __func__);
++	subsys = devm_kzalloc(&pdev->dev, sizeof(*subsys), GFP_KERNEL);
++	if (!subsys) {
++		return -ENOMEM;
++	}
++
++	dev_set_drvdata(&pdev->dev, subsys);
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res)
++		return -ENODEV;
++
++	subsys->reg_base = devm_ioremap_resource(&pdev->dev, res);
++	if (IS_ERR_OR_NULL(subsys->reg_base)) {
++		return PTR_ERR(subsys->reg_base);
++	}
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
++	if (!res)
++		return -ENODEV;
++
++	subsys->con_reg_base = devm_ioremap_resource(&pdev->dev, res);
++	if (IS_ERR_OR_NULL(subsys->con_reg_base)) {
++		return PTR_ERR(subsys->con_reg_base);
++	}
++
++	subsys->pdev = pdev;
++
++	ret = dsp_subsys_init_regmap(subsys);
++	if (0 != ret) {
++		return -ENODEV;
++	}
++
++	ret = dsp_subsys_reset_init(pdev, subsys);
++	if (0 != ret) {
++		return ret;
++	}
++
++	ret = dsp_subsys_clk_init(pdev, subsys);
++	if (0 != ret) {
++		return ret;
++	}
++
++	ret = dsp_subsys_clk_enable(subsys);
++	if (0 != ret) {
++		return ret;
++	}
++
++	ret = dsp_subsys_reset(subsys);
++	if (0 != ret) {
++		return ret;
++	}
++
++	subsys->dsp_subsys_status = dsp_subsys_status;
++
++	/* enable qos */
++	// win2030_noc_qos_set("DSPT");
++
++	return 0;
++}
++
++static int es_dsp_subsys_remove(struct platform_device *pdev)
++{
++	struct es_dsp_subsys *subsys = dev_get_drvdata(&pdev->dev);
++	if (subsys) {
++		clk_disable_unprepare(subsys->cfg_clk);
++	}
++
++	return 0;
++}
++
++#ifdef CONFIG_OF
++static const struct of_device_id es_dsp_subsys_match[] = {
++	{
++		.compatible = "es-dsp-subsys",
++	},
++	{},
++};
++MODULE_DEVICE_TABLE(of, es_dsp_subsys_match);
++#endif
++
++static struct platform_driver es_dsp_subsys_driver = {
++	.probe   = es_dsp_subsys_probe,
++	.remove  = es_dsp_subsys_remove,
++	.driver  = {
++		.name = DRIVER_NAME,
++		.of_match_table = of_match_ptr(es_dsp_subsys_match),
++	},
++};
++
++module_platform_driver(es_dsp_subsys_driver);
++
++MODULE_AUTHOR("Eswin");
++MODULE_DESCRIPTION("DSP: Low Level Device Driver For Eswin DSP");
++MODULE_LICENSE("Dual MIT/GPL");
+--- /dev/null
++++ b/drivers/soc/eswin/eswin-dsp-subsys.h
+@@ -0,0 +1,44 @@
++/*
++ * Program's name, and a brief idea of what it does（One line）.
++ * Copyright 20XX, Beijing ESWIN Computing Technology Co., Ltd.. All rights reserved.
++ * SPDX-License-Identifier: GPL-2.0-only
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, version 2.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++#ifndef __ESWIN_DSP_SUBSYS_H__
++#define __ESWIN_DSP_SUBSYS_H__
++#include <linux/reset.h>
++#include <linux/regmap.h>
++#include <linux/platform_device.h>
++
++typedef int (*dsp_subsys_status_pfunc)(void);
++
++struct es_dsp_subsys {
++	void __iomem *reg_base;
++	void __iomem *con_reg_base;
++	struct regmap *map;
++	struct regmap *con_map;
++	struct platform_device *pdev;
++
++	struct reset_control *rstc_axi;
++	struct reset_control *rstc_cfg;
++	struct reset_control *rstc_div4;
++	struct reset_control *rstc_div_0;
++	struct reset_control *rstc_div_1;
++	struct reset_control *rstc_div_2;
++	struct reset_control *rstc_div_3;
++	struct clk *cfg_clk;
++	dsp_subsys_status_pfunc dsp_subsys_status;
++};
++#endif
+\ No newline at end of file
+--- /dev/null
++++ b/drivers/soc/eswin/eswin-khandle.c
+@@ -0,0 +1,242 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include "eswin-khandle.h"
++#include <linux/vmalloc.h>
++#include <asm/atomic.h>
++#include <linux/xarray.h>
++
++struct fd_pool_desc {
++	spinlock_t lock;
++	struct xarray fd_array;
++};
++
++static void init_fd_pool(void *fd_pool)
++{
++	struct fd_pool_desc *pool = (struct fd_pool_desc *)fd_pool;
++	pr_debug("%s, %d, pool=0x%px", __func__, __LINE__, pool);
++	xa_init_flags(&pool->fd_array, XA_FLAGS_ALLOC);
++	spin_lock_init(&pool->lock);
++}
++
++static int alloc_fd(void *fd_pool, struct khandle *h)
++{
++	struct fd_pool_desc *pool = (struct fd_pool_desc *)fd_pool;
++	int ret;
++	u32 fd;
++
++	pr_debug("%s, %d, pool=0x%px", __func__, __LINE__, pool);
++	ret = xa_alloc(&pool->fd_array, &fd, h, xa_limit_32b, GFP_ATOMIC);
++	if (ret < 0) {
++		pr_err("%s, %d, ret=%d.\n", __func__, __LINE__, ret);
++		return ret;
++	}
++	pr_debug("%s, %d, pool=0x%px, fd=%d.\n", __func__, __LINE__, pool, fd);
++	return fd;
++}
++
++static void release_fd(void *fd_pool, int fd)
++{
++	unsigned long flags;
++	struct khandle *h;
++	struct fd_pool_desc *pool = (struct fd_pool_desc *)fd_pool;
++
++	pr_debug("%s, %d, pool=0x%px, fd=%d.\n", __func__, __LINE__, pool, fd);
++
++	spin_lock_irqsave(&pool->lock, flags);
++	h = xa_load(&pool->fd_array, fd);
++    if (!h) {
++    	spin_unlock_irqrestore(&pool->lock, flags);
++        return;
++    }
++	xa_erase(&pool->fd_array, fd);
++    spin_unlock_irqrestore(&pool->lock, flags);
++}
++
++static struct khandle *find_khandle_by_fd(void *fd_pool, int fd)
++{
++	unsigned long flags;
++	struct khandle *h;
++	struct fd_pool_desc *pool = (struct fd_pool_desc *)fd_pool;
++
++	spin_lock_irqsave(&pool->lock, flags);
++	h = xa_load(&pool->fd_array, fd);
++	if (h == NULL) {
++    	spin_unlock_irqrestore(&pool->lock, flags);
++		return NULL;
++	}
++	kref_get(&h->refcount);
++	spin_unlock_irqrestore(&pool->lock, flags);
++	return h;
++}
++
++static void kref_khandle_fn(struct kref *kref)
++{
++	unsigned long flags;
++	struct khandle *h = container_of(kref, struct khandle, refcount);
++	struct khandle *parent;
++	struct fd_pool_desc *pool;
++
++	pr_debug("%s, h address=0x%px.\n", __func__, h);
++	BUG_ON(h == NULL);
++	BUG_ON(h->fd != INVALID_HANDLE_VALUE);
++
++	pr_debug("%s, k->fd=%d, refcount=%d.\n", __func__, h->fd,
++		 kref_read(kref));
++
++	parent = h->parent;
++
++	if (parent == NULL) {
++		pool = h->fd_pool;
++		xa_destroy(&pool->fd_array);
++		vfree(h->fd_pool);
++	} else {
++		spin_lock_irqsave(&parent->lock, flags);
++		list_del_init(&h->entry);
++		spin_unlock_irqrestore(&parent->lock, flags);
++	}
++
++	if (h->fn != NULL) {
++		h->fn(h);
++	}
++
++	if (parent != NULL) {
++		kref_put(&parent->refcount, kref_khandle_fn);
++	}
++}
++
++void kernel_handle_addref(struct khandle *h)
++{
++	BUG_ON(h == NULL);
++
++	kref_get(&h->refcount);
++	pr_debug("%s, h addr=0x%px, fd=%d, refcount=%d.\n", __func__, h, h->fd,
++		 kref_read(&h->refcount));
++}
++EXPORT_SYMBOL(kernel_handle_addref);
++
++void kernel_handle_decref(struct khandle *h)
++{
++	BUG_ON(h == NULL);
++
++	kref_put(&h->refcount, kref_khandle_fn);
++	pr_debug("%s, done.\n", __func__);
++}
++EXPORT_SYMBOL(kernel_handle_decref);
++
++static struct list_head *capture_next_khandle_node(struct list_head *head,
++						   struct list_head *cur)
++{
++	struct khandle *h;
++
++	while (true) {
++		cur = cur->next;
++		if (cur == head) {
++			return cur;
++		}
++
++		/* Protect child not released until return of kernel_handle_release_family. */
++		h = container_of(cur, struct khandle, entry);
++		if (kref_get_unless_zero(&h->refcount) != 0) {
++			return cur;
++		}
++	}
++}
++
++void kernel_handle_release_family(struct khandle *h)
++{
++	unsigned long flags;
++	struct list_head *child;
++	struct khandle *child_khandle;
++
++	BUG_ON(h == NULL);
++	spin_lock_irqsave(&h->lock, flags);
++	if (h->fd == INVALID_HANDLE_VALUE) {
++		spin_unlock_irqrestore(&h->lock, flags);
++		return;
++	}
++
++	release_fd(h->fd_pool, h->fd);
++	h->fd = INVALID_HANDLE_VALUE;
++	child = capture_next_khandle_node(&h->head, &h->head);
++	while (child != &h->head) {
++		child_khandle = container_of(child, struct khandle, entry);
++		child = capture_next_khandle_node(&h->head, child);
++		spin_unlock_irqrestore(&h->lock, flags);
++		kernel_handle_release_family(child_khandle);
++		kernel_handle_decref(child_khandle);
++		spin_lock_irqsave(&h->lock, flags);
++	}
++
++	spin_unlock_irqrestore(&h->lock, flags);
++	kref_put(&h->refcount, kref_khandle_fn);
++	pr_debug("%s, done.\n", __func__);
++}
++EXPORT_SYMBOL(kernel_handle_release_family);
++
++int init_kernel_handle(struct khandle *h, release_khandle_fn fn, int magic,
++		       struct khandle *parent)
++{
++	unsigned long flags;
++	void *fd_pool;
++
++	BUG_ON(h == NULL);
++	kref_init(&h->refcount);
++	kref_get(&h->refcount);
++
++	if ((h->parent = parent) == NULL) {
++		fd_pool = vmalloc(sizeof(struct fd_pool_desc));
++		init_fd_pool(fd_pool);
++		if (fd_pool == NULL) {
++			return -ENOMEM;
++		}
++	} else {
++		fd_pool = parent->fd_pool;
++	}
++	h->fd_pool = fd_pool;
++
++	if ((h->fd = alloc_fd(fd_pool, h)) == INVALID_HANDLE_VALUE) {
++		BUG_ON(parent == NULL);
++		return -EINVAL;
++	}
++
++	pr_debug("%s, hfile addr=%u.\n", __func__, h->fd);
++	h->fn = fn;
++	h->magic = magic;
++	spin_lock_init(&h->lock);
++
++	INIT_LIST_HEAD(&h->head);
++	INIT_LIST_HEAD(&h->entry);
++
++	if (parent != NULL) {
++		spin_lock_irqsave(&parent->lock, flags);
++		if (parent->fd == INVALID_HANDLE_VALUE) {
++			spin_unlock_irqrestore(&parent->lock, flags);
++			release_fd(fd_pool, h->fd);
++			return -EINVAL;
++		}
++
++		list_add_tail(&h->entry, &parent->head);
++		kref_get(&parent->refcount);
++		spin_unlock_irqrestore(&parent->lock, flags);
++	}
++
++	return 0;
++}
++EXPORT_SYMBOL(init_kernel_handle);
++
++struct khandle *find_kernel_handle(struct khandle *ancestor, int fd, int magic)
++{
++	struct khandle *h;
++
++	h = find_khandle_by_fd(ancestor->fd_pool, fd);
++	if (h == NULL) {
++		return NULL;
++	}
++
++	if (h->magic != magic) {
++		kref_put(&h->refcount, kref_khandle_fn);
++		return NULL;
++	}
++	return h;
++}
++EXPORT_SYMBOL(find_kernel_handle);
+--- /dev/null
++++ b/drivers/soc/eswin/eswin-khandle.h
+@@ -0,0 +1,84 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef __ESWIN_KHANDLE_H_
++#define __ESWIN_KHANDLE_H_
++
++#include <linux/kref.h>
++#include <linux/types.h>
++#include <linux/list.h>
++#include <linux/mutex.h>
++
++#define INVALID_HANDLE_VALUE (-1)
++
++struct khandle;
++typedef void (*release_khandle_fn)(struct khandle *h);
++struct khandle {
++	int fd;
++	int magic;
++	spinlock_t lock;
++	release_khandle_fn fn;
++	struct kref refcount;
++	struct list_head entry;
++	struct list_head head;
++	struct khandle *parent;
++	void *fd_pool;
++};
++
++/**
++ * @brief Remove the family relations hierachy. This function also actively
++ * free the fd of this kernel object and its descendants.
++ *
++ * @param o: This is the kernel object.
++ */
++void kernel_handle_release_family(struct khandle *o);
++
++/**
++ * @brief Decrease the reference of kernel object `o`. If reference reaches 0,
++ * the release delegation function is called.
++ *
++ * @param o: This is the kernel object.
++ */
++void kernel_handle_decref(struct khandle *o);
++
++
++/**
++ * @brief Increase the reference of kernel object `o`.
++ *
++ * @param o: This is the kernel object.
++ */
++void kernel_handle_addref(struct khandle *o);
++
++
++/**
++ * @brief This function intialize an kernel object in the memory specified by
++ * `o`. It returns zero on success or a Linux error code. Note this function
++ * should only be called in IOCtl context. The initial reference is set to 1.
++ *
++ * @param o: This specifies an memory for holding kernel object.
++ * @param fn: This points to a callback delegation function. When the
++ * reference of `o` reaches 0, this callback function is called. It
++ * is intended for releasing resources associated with this kernel
++ * object.
++ * @param magic: This is a magic number for determining the type of kernel
++ * object.
++ * @param parent: Points to the parent of this kernel object.
++ * @return It returns zero on success or a Linux error code.
++ *
++ * when use khandle, host structure release must use kernel_handle_decref function.
++ */
++int init_kernel_handle(struct khandle *o, release_khandle_fn fn, int magic,
++					   struct khandle *parent);
++
++
++/**
++ * @brief This function is used to find the kernel object associated with fd.
++ * Note the khandle object has one additional reference so user should dereference
++ * it if not needed.
++ *
++ * @param ancestor: This is one ancestor of kernel object that matches fd.
++ * @param fd: This is the fd associated with a specific kernel object.
++ * @param magic: This is the magic associated with a specific kernel object.
++ * @return It returns the kernel object on success or NULL if the given fd
++ * is invalid.
++ */
++struct khandle *find_kernel_handle(struct khandle *ancestor, int fd, int magic);
++#endif
+--- /dev/null
++++ b/drivers/soc/eswin/eswin_timer.h
+@@ -0,0 +1,6 @@
++#ifndef __ESWIN_TIMER_H_
++#define __ESWIN_TIMER_H_
++
++extern u32 get_perf_timer_cnt(void);
++
++#endif

@@ -1,0 +1,55 @@
+From dcacacfb6e329b5f08f38728e183c7927c313e23 Mon Sep 17 00:00:00 2001
+From: Han Gao <gaohan@iscas.ac.cn>
+Date: Sun, 7 Jul 2024 00:45:36 +0800
+Subject: [PATCH 65/68] regulator: mpq8785: mpq8785_label: add label len for
+ "npu temperature1"
+
+detected buffer overflow in strcpy
+
+[    1.391721] detected buffer overflow in strcpy
+[    1.396122] ------------[ cut here ]------------
+[    1.396124] Kernel BUG at fortify_panic+0x1a/0x1c [verbose debug info unavailable]
+[    1.396142] Kernel BUG [#1]
+[    1.396145] Modules linked in:
+[    1.396150] CPU: 0 PID: 1 Comm: swapper/0 Not tainted 6.6.36 #0
+[    1.396155] Hardware name: ESWIN EIC7700 (DT)
+[    1.396157] epc : fortify_panic+0x1a/0x1c
+[    1.396163]  ra : fortify_panic+0x1a/0x1c
+[    1.396168] epc : ffffffff8030b2de ra : ffffffff8030b2de sp : ffffaf80a7177b20
+[    1.396171]  gp : ffffffff812e47a8 tp : ffffaf80a714cd00 t0 : 2000000000000000
+[    1.396174]  t1 : 0000000000000064 t2 : 2064657463657465 s0 : ffffaf80a7177b30
+[    1.396177]  s1 : ffffaf80a8755c40 a0 : 0000000000000022 a1 : ffffffff81283d48
+[    1.396180]  a2 : 0000000000000010 a3 : ffffffff81283d48 a4 : ffffffff81283d60
+[    1.396183]  a5 : 0000000000000000 a6 : ffffffff81213cf0 a7 : 0000000000000001
+[    1.396186]  s2 : ffffaf80a794a000 s3 : ffffaf80a8755c60 s4 : ffff8d7ffec18dae
+[    1.396189]  s5 : ffffaf82a6f9fb00 s6 : ffffaf80a794a020 s7 : ffffaf80a8755cd0
+[    1.396192]  s8 : 0000000000000000 s9 : 0000000000000000 s10: 0000000000000000
+[    1.396194]  s11: 0000000000000000 t3 : ffffffff812f5ad7 t4 : ffffffff812f5ad7
+[    1.396197]  t5 : ffffffff812f5ad8 t6 : ffffaf80a7177970
+[    1.396199] status: 0000000200000120 badaddr: 0000000000000000 cause: 0000000000000003
+[    1.396203] [<ffffffff8030b2de>] fortify_panic+0x1a/0x1c
+[    1.396209] [<ffffffff80393d18>] mpq8785_probe+0x3d8/0x462
+
+Signed-off-by: Han Gao <gaohan@iscas.ac.cn>
+---
+ drivers/regulator/mpq8785.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+--- a/drivers/regulator/mpq8785.c
++++ b/drivers/regulator/mpq8785.c
+@@ -153,7 +153,7 @@ struct MPQ8785_DRIVER_DATA
+ 	struct regulator_desc *dev_desc;
+ 	struct i2c_client *client;
+ 	struct mutex config_lock;
+-	char mpq8785_label[MPQ8785_LABEL_CNT][16];
++	char mpq8785_label[MPQ8785_LABEL_CNT][20];
+ };
+ 
+ #define MPQ8785_MASK_OPERATION_ENABLE 0X80
+@@ -1216,4 +1216,4 @@ module_i2c_driver(mpq8785_driver);
+ 
+ MODULE_AUTHOR("Yang Wei <yangwei1@eswincomputing.com>");
+ MODULE_DESCRIPTION("mpq8785 driver");
+-MODULE_LICENSE("GPL");
+\ No newline at end of file
++MODULE_LICENSE("GPL");

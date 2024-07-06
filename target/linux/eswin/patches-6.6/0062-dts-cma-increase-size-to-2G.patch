@@ -1,0 +1,48 @@
+From 9340ccb7600c5cab47d826dde6087fe7c176f72b Mon Sep 17 00:00:00 2001
+From: Han Gao <gaohan@iscas.ac.cn>
+Date: Fri, 28 Jun 2024 19:39:51 +0800
+Subject: [PATCH 62/68] dts: cma: increase size to 2G
+
+for evb & evb-a2 & p550 increase cma size to 2G
+
+Signed-off-by: Han Gao <gaohan@iscas.ac.cn>
+Signed-off-by: Han Gao <rabenda.cn@gmail.com>
+---
+ arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts     | 2 +-
+ arch/riscv/boot/dts/eswin/eic7700-evb.dts        | 2 +-
+ arch/riscv/boot/dts/eswin/hifive-premier-550.dts | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
+@@ -26,7 +26,7 @@
+ /* If wanna enable ECC capability of DDR, should reserve highest zone of 1/8 all space for it */
+ #define MEMORY_SIZE_H		0x4
+ #define MEMORY_SIZE_L		0x0
+-#define CMA_SIZE		0x20000000
++#define CMA_SIZE		0x80000000
+ 
+ #include "eswin-win2030-die0-soc.dtsi"
+ #include "eic7700-pinctrl.dtsi"
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb.dts
+@@ -26,7 +26,7 @@
+ /* reserve 2GB space for ddr ecc */
+ #define MEMORY_SIZE_H		0x3
+ #define MEMORY_SIZE_L		0x80000000
+-#define CMA_SIZE		0x20000000
++#define CMA_SIZE		0x80000000
+ 
+ #include "eswin-win2030-die0-soc.dtsi"
+ #include "eic7700-pinctrl.dtsi"
+--- a/arch/riscv/boot/dts/eswin/hifive-premier-550.dts
++++ b/arch/riscv/boot/dts/eswin/hifive-premier-550.dts
+@@ -26,7 +26,7 @@
+ /* If wanna enable ECC capability of DDR, should reserve highest zone of 1/8 all space for it */
+ #define MEMORY_SIZE_H		0x4
+ #define MEMORY_SIZE_L		0x0
+-#define CMA_SIZE		0x10000000
++#define CMA_SIZE		0x80000000
+ 
+ #include "eswin-win2030-die0-soc.dtsi"
+ #include "eic7700-pinctrl.dtsi"

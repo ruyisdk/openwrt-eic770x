@@ -1,0 +1,32 @@
+From 7c27fc9d53eab9912215dc2f88cc6d6e43aafbdf Mon Sep 17 00:00:00 2001
+From: linmin <linmin@eswincomputing.com>
+Date: Tue, 21 May 2024 13:50:46 +0800
+Subject: [PATCH 10/68] WIN2030-14758:feat(CMA):Select CONFIG_CMA and
+ CONFIG_DMA_CMA
+
+Changelogs:
+1.Select CONFIG_CMA and CONFIG_DMA_CMA, save it to win2030_defconfig
+
+Change-Id: Ic833f743a8e2195fd72d342aca2eda40658f4589
+---
+ arch/riscv/configs/win2030_defconfig | 2 ++
+ 1 file changed, 2 insertions(+)
+
+--- a/arch/riscv/configs/win2030_defconfig
++++ b/arch/riscv/configs/win2030_defconfig
+@@ -36,6 +36,7 @@ CONFIG_JUMP_LABEL=y
+ CONFIG_MODULES=y
+ CONFIG_MODULE_UNLOAD=y
+ CONFIG_SPARSEMEM_MANUAL=y
++CONFIG_CMA=y
+ CONFIG_NET=y
+ CONFIG_PACKET=y
+ CONFIG_UNIX=y
+@@ -269,6 +270,7 @@ CONFIG_CRYPTO_DEV_VIRTIO=y
+ CONFIG_CRC_ITU_T=y
+ CONFIG_CRC7=y
+ CONFIG_XZ_DEC=y
++CONFIG_DMA_CMA=y
+ CONFIG_PRINTK_TIME=y
+ CONFIG_CONSOLE_LOGLEVEL_DEFAULT=15
+ CONFIG_CONSOLE_LOGLEVEL_QUIET=15

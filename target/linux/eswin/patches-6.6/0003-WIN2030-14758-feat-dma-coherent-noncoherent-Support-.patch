@@ -1,0 +1,799 @@
+From b13d8179990e12a6d8d3e4b46b35a136bfd21c7d Mon Sep 17 00:00:00 2001
+From: linmin <linmin@eswincomputing.com>
+Date: Sun, 7 Apr 2024 17:38:16 +0800
+Subject: [PATCH 03/68] WIN2030-14758:feat(dma coherent/noncoherent):Support
+ dma coherent/noncoherent
+
+Changelogs:
+1.Defined CONFIG_ARCH_ESWIN_EIC770X_SOC_FAMILY in drivers/soc/sifive/Kconfig
+2.Modified pfn_pte()/pte_pfn() transformation to support _PAGE_UNCACHE pgtable bit
+3.Selected RISCV_DMA_NONCOHERENT
+4.Added riscv_noncoherent_supported() in sifive_errata_probe() to support dma-noncohrent
+5.Register noncohernt_cache_ops while sifive_ccache_init
+
+Change-Id: I1fd347e04e5cb24f878dc3cc67b993044e352151
+---
+ arch/riscv/configs/win2030_defconfig  |  61 +------
+ arch/riscv/errata/sifive/errata.c     |   7 +
+ arch/riscv/include/asm/pgtable-bits.h |   7 +
+ arch/riscv/include/asm/pgtable.h      | 220 ++++++++++++++++++++++++++
+ arch/riscv/mm/dma-noncoherent.c       |  77 +++++++++
+ drivers/soc/sifive/Kconfig            |  85 ++++++++++
+ drivers/soc/sifive/sifive_ccache.c    |  43 +++++
+ 7 files changed, 444 insertions(+), 56 deletions(-)
+
+--- a/arch/riscv/configs/win2030_defconfig
++++ b/arch/riscv/configs/win2030_defconfig
+@@ -14,14 +14,12 @@ CONFIG_USER_NS=y
+ CONFIG_CHECKPOINT_RESTORE=y
+ CONFIG_BLK_DEV_INITRD=y
+ CONFIG_INITRAMFS_SOURCE="${BR_BINARIES_DIR}/rootfs.cpio"
+-CONFIG_INITRAMFS_COMPRESSION_NONE=y
+ CONFIG_EXPERT=y
+ # CONFIG_SYSFS_SYSCALL is not set
+ CONFIG_PERF_EVENTS=y
+ CONFIG_SOC_SIFIVE=y
+ CONFIG_SOC_VIRT=y
+ CONFIG_SMP=y
+-CONFIG_HOTPLUG_CPU=y
+ CONFIG_RISCV_SBI_V01=y
+ # CONFIG_RISCV_BOOT_SPINWAIT is not set
+ CONFIG_CMDLINE="earlycon=sbi console=ttyS0,115200n8 clk_ignore_unused cma_pernuma=0x2000000 disable_bypass=false"
+@@ -40,14 +38,10 @@ CONFIG_JUMP_LABEL=y
+ CONFIG_MODULES=y
+ CONFIG_MODULE_UNLOAD=y
+ CONFIG_SPARSEMEM_MANUAL=y
+-CONFIG_ESWIN_RSVMEM=y
+ CONFIG_NET=y
+ CONFIG_PACKET=y
+ CONFIG_UNIX=y
+ CONFIG_INET=y
+-CONFIG_IP_PNP=y
+-CONFIG_IP_PNP_DHCP=y
+-CONFIG_IP_PNP_BOOTP=y
+ # CONFIG_IPV6 is not set
+ CONFIG_NET_SCHED=y
+ CONFIG_NET_CLS_ACT=y
+@@ -60,7 +54,6 @@ CONFIG_PCIE_PTM=y
+ # CONFIG_PCI_QUIRKS is not set
+ CONFIG_PCI_PRI=y
+ CONFIG_PCI_PASID=y
+-CONFIG_PCIE_ESWIN=y
+ CONFIG_DEVTMPFS=y
+ CONFIG_DEVTMPFS_MOUNT=y
+ CONFIG_MTD=y
+@@ -72,10 +65,6 @@ CONFIG_BLK_DEV_RAM_SIZE=32768
+ CONFIG_VIRTIO_BLK=y
+ CONFIG_BLK_DEV_NVME=y
+ CONFIG_NVME_MULTIPATH=y
+-CONFIG_LCPU_SMMU_TEST=y
+-CONFIG_SCPU_DMAAPI_SMMU_TEST=y
+-CONFIG_SMP_IPI_TEST=y
+-CONFIG_ESWIN_NUMA_SAMPLE=m
+ CONFIG_EEPROM_AT24=y
+ # CONFIG_SCSI_PROC_FS is not set
+ CONFIG_BLK_DEV_SD=y
+@@ -83,7 +72,6 @@ CONFIG_BLK_DEV_SD=y
+ # CONFIG_SCSI_LOWLEVEL is not set
+ CONFIG_ATA=y
+ CONFIG_SATA_AHCI=y
+-CONFIG_AHCI_ESWIN=y
+ CONFIG_NETDEVICES=y
+ # CONFIG_NET_VENDOR_ALACRITECH is not set
+ # CONFIG_NET_VENDOR_AMAZON is not set
+@@ -99,16 +87,16 @@ CONFIG_NETDEVICES=y
+ # CONFIG_NET_VENDOR_GOOGLE is not set
+ # CONFIG_NET_VENDOR_HUAWEI is not set
+ # CONFIG_NET_VENDOR_INTEL is not set
+-# CONFIG_NET_VENDOR_MICROSOFT is not set
+ # CONFIG_NET_VENDOR_LITEX is not set
+ # CONFIG_NET_VENDOR_MARVELL is not set
+ # CONFIG_NET_VENDOR_MELLANOX is not set
+ # CONFIG_NET_VENDOR_MICREL is not set
+ # CONFIG_NET_VENDOR_MICROCHIP is not set
+ # CONFIG_NET_VENDOR_MICROSEMI is not set
++# CONFIG_NET_VENDOR_MICROSOFT is not set
++# CONFIG_NET_VENDOR_NI is not set
+ # CONFIG_NET_VENDOR_NATSEMI is not set
+ # CONFIG_NET_VENDOR_NETRONOME is not set
+-# CONFIG_NET_VENDOR_NI is not set
+ # CONFIG_NET_VENDOR_PENSANDO is not set
+ # CONFIG_NET_VENDOR_QUALCOMM is not set
+ # CONFIG_NET_VENDOR_RENESAS is not set
+@@ -119,7 +107,6 @@ CONFIG_NETDEVICES=y
+ # CONFIG_NET_VENDOR_SOCIONEXT is not set
+ CONFIG_STMMAC_ETH=y
+ CONFIG_STMMAC_SELFTESTS=y
+-CONFIG_DWMAC_WIN2030=y
+ # CONFIG_DWMAC_GENERIC is not set
+ # CONFIG_NET_VENDOR_SYNOPSYS is not set
+ # CONFIG_NET_VENDOR_VERTEXCOM is not set
+@@ -146,27 +133,20 @@ CONFIG_I2C_CHARDEV=y
+ # CONFIG_I2C_HELPER_AUTO is not set
+ CONFIG_I2C_DESIGNWARE_SLAVE=y
+ CONFIG_I2C_DESIGNWARE_PLATFORM=y
+-CONFIG_I2C_DESIGNWARE_ESWIN=y
+ CONFIG_I2C_SLAVE_EEPROM=y
+ CONFIG_SPI=y
+ CONFIG_SPI_DESIGNWARE=y
+ CONFIG_SPI_DW_DMA=y
+ CONFIG_SPI_DW_MMIO=y
+-CONFIG_SPI_DEMO=m
+ # CONFIG_PTP_1588_CLOCK is not set
+ CONFIG_PINCTRL=y
+-CONFIG_PINCTRL_EIC7700=y
+ CONFIG_GPIOLIB=y
+ CONFIG_GPIO_SYSFS=y
+ CONFIG_GPIO_DWAPB=y
+-CONFIG_GPIO_ESWIN=y
+-CONFIG_SENSORS_ESWIN_FAN_CONTROL=y
+-CONFIG_SENSORS_ESWIN_PVT=y
+ CONFIG_SENSORS_INA2XX=y
+ CONFIG_WATCHDOG=y
+ CONFIG_DW_WATCHDOG=y
+ CONFIG_REGULATOR=y
+-CONFIG_REGULATOR_MPQ8785=y
+ # CONFIG_MEDIA_CEC_SUPPORT is not set
+ CONFIG_MEDIA_SUPPORT=y
+ CONFIG_V4L_PLATFORM_DRIVERS=y
+@@ -178,23 +158,12 @@ CONFIG_DRM_TOSHIBA_TC358768=m
+ CONFIG_DRM_LEGACY=y
+ CONFIG_FB=y
+ CONFIG_BACKLIGHT_CLASS_DEVICE=y
+-CONFIG_FRAMEBUFFER_CONSOLE=y
+ CONFIG_SOUND=y
+ CONFIG_SND=y
+ CONFIG_SND_SOC=y
+ CONFIG_SND_SOC_SOF_TOPLEVEL=y
+ CONFIG_SND_SOC_SOF_OF=y
+-CONFIG_SND_SOC_SOF_ESWIN_TOPLEVEL=y
+-CONFIG_SND_SOC_SOF_ESWIN=m
+-CONFIG_SND_ESWIN_DW_I2S=y
+-CONFIG_SND_ESWIN_DW_PCM=y
+-CONFIG_SND_ESWIN_DAI=y
+-CONFIG_SND_SOC_HDMI_CODEC=y
+ CONFIG_SND_SOC_ES8316=y
+-CONFIG_SND_SOC_THRU_OUT=y
+-CONFIG_ESWIN_SND_SOC_CODECS=y
+-CONFIG_ESWIN_SND_ES8388_CODEC=y
+-CONFIG_ESWIN_SND_DUMMY_CODEC=y
+ CONFIG_SND_SIMPLE_CARD=y
+ CONFIG_SND_AUDIO_GRAPH_CARD=y
+ CONFIG_USB_ULPI_BUS=y
+@@ -241,44 +210,27 @@ CONFIG_MMC_TEST=y
+ CONFIG_MMC_DEBUG=y
+ CONFIG_MMC_SDHCI=y
+ CONFIG_MMC_SDHCI_PLTFM=y
+-CONFIG_MMC_SDHCI_OF_SDIO_FU800=y
+-CONFIG_MMC_SDHCI_OF_FU800=y
+ CONFIG_RTC_CLASS=y
+ CONFIG_RTC_DRV_PCF8563=y
+-CONFIG_RTC_DRV_ESWIN=y
+ CONFIG_DMADEVICES=y
+ CONFIG_DW_AXI_DMAC=y
+ CONFIG_DMATEST=y
+-CONFIG_DMATEST_UNITEST=y
+-CONFIG_DMABUF_HEAPS_SYSTEM_COHERENT=y
+-CONFIG_DMABUF_HEAPS_IMPORT_HELPER=y
++CONFIG_DMABUF_HEAPS=y
++CONFIG_DMABUF_HEAPS_SYSTEM=y
+ CONFIG_VIRTIO_BALLOON=y
+ CONFIG_VIRTIO_INPUT=y
+ CONFIG_VIRTIO_MMIO=y
+ CONFIG_STAGING=y
+-# CONFIG_DW200 is not set
+ CONFIG_COMMON_CLK_WIN2030=y
+-CONFIG_TIMER_ESWIN=y
+ CONFIG_MAILBOX=y
+-CONFIG_ESWIN_MBOX=y
+-CONFIG_ESWIN_IPC_SCPU=m
+-CONFIG_ESWIN_LPCPU=m
+-CONFIG_ARM_SMMU_V3=y
+ CONFIG_RPMSG_VIRTIO=y
+-CONFIG_SIFIVE_L2=y
+-CONFIG_SIFIVE_L2_FLUSH=y
++CONFIG_ARCH_ESWIN_EIC770X_SOC_FAMILY=y
+ CONFIG_EXTCON=y
+ CONFIG_PWM=y
+-CONFIG_PWM_ESWIN=y
+ CONFIG_RESET_ESWIN_WIN2030=y
+-CONFIG_PHY_MIXEL_MIPI_DPHY=m
+-CONFIG_ARM_SMMU_V3_PMU=y
+ CONFIG_INTERCONNECT=y
+-CONFIG_DSP=y
+-CONFIG_ESWIN_DSP_SUBSYS=y
+ CONFIG_EXT4_FS=y
+ CONFIG_EXT4_FS_POSIX_ACL=y
+-CONFIG_AUTOFS4_FS=y
+ CONFIG_MSDOS_FS=y
+ CONFIG_VFAT_FS=y
+ CONFIG_TMPFS=y
+@@ -288,14 +240,12 @@ CONFIG_NFS_V3_ACL=y
+ CONFIG_NFS_V4=y
+ CONFIG_NFS_V4_1=y
+ CONFIG_NFS_V4_2=y
+-CONFIG_ROOT_NFS=y
+ CONFIG_NLS_CODEPAGE_437=y
+ CONFIG_NLS_ISO8859_1=m
+ CONFIG_CRYPTO_MD5=y
+ CONFIG_CRYPTO_DEV_VIRTIO=y
+ CONFIG_CRC_ITU_T=y
+ CONFIG_CRC7=y
+-CONFIG_XZ_DEC=y
+ CONFIG_PRINTK_TIME=y
+ CONFIG_CONSOLE_LOGLEVEL_DEFAULT=15
+ CONFIG_CONSOLE_LOGLEVEL_QUIET=15
+@@ -316,7 +266,6 @@ CONFIG_DEBUG_SPINLOCK=y
+ CONFIG_DEBUG_MUTEXES=y
+ CONFIG_DEBUG_RWSEMS=y
+ CONFIG_DEBUG_ATOMIC_SLEEP=y
+-CONFIG_STACKTRACE=y
+ CONFIG_DEBUG_LIST=y
+ CONFIG_DEBUG_PLIST=y
+ CONFIG_DEBUG_SG=y
+--- a/arch/riscv/errata/sifive/errata.c
++++ b/arch/riscv/errata/sifive/errata.c
+@@ -12,6 +12,7 @@
+ #include <asm/alternative.h>
+ #include <asm/vendorid_list.h>
+ #include <asm/errata_list.h>
++#include <asm/cacheflush.h>
+ 
+ struct errata_info_t {
+ 	char name[32];
+@@ -62,6 +63,12 @@ static u32 __init_or_module sifive_errat
+ 	int idx;
+ 	u32 cpu_req_errata = 0;
+ 
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC770X_SOC_FAMILY)
++	/* Set this just to make core cbo code happy */
++	riscv_cbom_block_size = 1;
++	riscv_noncoherent_supported();
++#endif
++
+ 	for (idx = 0; idx < ERRATA_SIFIVE_NUMBER; idx++)
+ 		if (errata_list[idx].check_func(archid, impid))
+ 			cpu_req_errata |= (1U << idx);
+--- a/arch/riscv/include/asm/pgtable-bits.h
++++ b/arch/riscv/include/asm/pgtable-bits.h
+@@ -18,6 +18,13 @@
+ #define _PAGE_DIRTY     (1 << 7)    /* Set by hardware on any write */
+ #define _PAGE_SOFT      (1 << 8)    /* Reserved for software */
+ 
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC770X_SOC_FAMILY)
++#define _PAGE_UNCACHE   (1 << 9)    /* Map to system port .i.e, uncached*/
++
++/* Map to system port llc .i.e, through sys port llc space */
++#define _PAGE_LLC       (1 << 12)
++#endif
++
+ #define _PAGE_SPECIAL   _PAGE_SOFT
+ #define _PAGE_TABLE     _PAGE_PRESENT
+ 
+--- a/arch/riscv/include/asm/pgtable.h
++++ b/arch/riscv/include/asm/pgtable.h
+@@ -205,9 +205,192 @@ extern struct pt_alloc_ops pt_ops __init
+ 
+ #define PAGE_TABLE		__pgprot(_PAGE_TABLE)
+ 
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC770X_SOC_FAMILY)
++#define _PAGE_IOREMAP (_PAGE_KERNEL | _PAGE_UNCACHE)
++#else
+ #define _PAGE_IOREMAP	((_PAGE_KERNEL & ~_PAGE_MTMASK) | _PAGE_IO)
++#endif
+ #define PAGE_KERNEL_IO		__pgprot(_PAGE_IOREMAP)
+ 
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC770X_SOC_FAMILY)
++/* DIE0 */
++#define DIE0_MEM_PORT_PFN_START				(CONFIG_RISCV_DIE0_CACHED_OFFSET >> PAGE_SHIFT)
++#define DIE0_MEM_PORT_PFN_END				((CONFIG_RISCV_DIE0_CACHED_OFFSET + CONFIG_RISCV_DIE0_MEM_MAX_SIZE) >> PAGE_SHIFT)
++
++#define DIE0_SYS_PORT_PFN_START				(CONFIG_RISCV_DIE0_UNCACHED_OFFSET >> PAGE_SHIFT)
++#define DIE0_MEM_TO_SYS_PFN_ADDRESS(a)			(DIE0_SYS_PORT_PFN_START + ((u64)(a) - DIE0_MEM_PORT_PFN_START))
++#define DIE0_SYS_TO_MEM_PFN_ADDRESS(a)			(DIE0_MEM_PORT_PFN_START + ((u64)(a) - DIE0_SYS_PORT_PFN_START))
++#define DIE0_SYS_PORT_PFN_END				((CONFIG_RISCV_DIE0_UNCACHED_OFFSET + CONFIG_RISCV_DIE0_MEM_MAX_SIZE) >> PAGE_SHIFT)
++
++#define DIE0_SYS_PORT_LLC_PFN_START			((CONFIG_RISCV_DIE0_UNCACHED_OFFSET + 0x1800000000)>> PAGE_SHIFT)
++#define DIE0_MEM_TO_SYS_LLC_PFN_ADDRESS(a)		(DIE0_SYS_PORT_LLC_PFN_START + ((u64)(a) - DIE0_MEM_PORT_PFN_START))
++#define DIE0_SYS_LLC_TO_MEM_PFN_ADDRESS(a)		(DIE0_MEM_PORT_PFN_START + ((u64)(a) - DIE0_SYS_PORT_LLC_PFN_START))
++#define DIE0_SYS_PORT_LLC_PFN_END			(((CONFIG_RISCV_DIE0_UNCACHED_OFFSET + 0x1800000000) + CONFIG_RISCV_DIE0_MEM_MAX_SIZE) >> PAGE_SHIFT)
++
++/* DIE1 */
++#define DIE1_MEM_PORT_PFN_START				(CONFIG_RISCV_DIE1_CACHED_OFFSET >> PAGE_SHIFT)
++#define DIE1_MEM_PORT_PFN_END				((CONFIG_RISCV_DIE1_CACHED_OFFSET + CONFIG_RISCV_DIE1_MEM_MAX_SIZE) >> PAGE_SHIFT)
++
++#define DIE1_SYS_PORT_PFN_START				(CONFIG_RISCV_DIE1_UNCACHED_OFFSET >> PAGE_SHIFT)
++#define DIE1_MEM_TO_SYS_PFN_ADDRESS(a)			(DIE1_SYS_PORT_PFN_START + ((u64)(a) - DIE1_MEM_PORT_PFN_START))
++#define DIE1_SYS_TO_MEM_PFN_ADDRESS(a)			(DIE1_MEM_PORT_PFN_START + ((u64)(a) - DIE1_SYS_PORT_PFN_START))
++#define DIE1_SYS_PORT_PFN_END				((CONFIG_RISCV_DIE1_UNCACHED_OFFSET + CONFIG_RISCV_DIE1_MEM_MAX_SIZE) >> PAGE_SHIFT)
++
++#define DIE1_SYS_PORT_LLC_PFN_START			((CONFIG_RISCV_DIE1_UNCACHED_OFFSET + 0x1800000000) >> PAGE_SHIFT)
++#define DIE1_MEM_TO_SYS_LLC_PFN_ADDRESS(a)		(DIE1_SYS_PORT_LLC_PFN_START + ((u64)(a) - DIE1_MEM_PORT_PFN_START))
++#define DIE1_SYS_LLC_TO_MEM_PFN_ADDRESS(a)		(DIE1_MEM_PORT_PFN_START + ((u64)(a) - DIE1_SYS_PORT_LLC_PFN_START))
++#define DIE1_SYS_PORT_LLC_PFN_END			(((CONFIG_RISCV_DIE1_UNCACHED_OFFSET + 0x1800000000) + CONFIG_RISCV_DIE1_MEM_MAX_SIZE) >> PAGE_SHIFT)
++
++/* interleave */
++#define INTERLEAVE_MEM_PORT_PFN_START			(CONFIG_RISCV_INTERLEAVE_CACHED_OFFSET >> PAGE_SHIFT)
++#define INTERLEAVE_MEM_PORT_PFN_END			((CONFIG_RISCV_INTERLEAVE_CACHED_OFFSET + CONFIG_RISCV_INTERLEAVE_MEM_MAX_SIZE) >> PAGE_SHIFT)
++
++#define INTERLEAVE_SYS_PORT_PFN_START			(CONFIG_RISCV_INTERLEAVE_UNCACHED_OFFSET >> PAGE_SHIFT)
++#define INTERLEAVE_MEM_TO_SYS_PFN_ADDRESS(a)		(INTERLEAVE_SYS_PORT_PFN_START + ((u64)(a) - INTERLEAVE_MEM_PORT_PFN_START))
++#define INTERLEAVE_SYS_TO_MEM_PFN_ADDRESS(a)		(INTERLEAVE_MEM_PORT_PFN_START + ((u64)(a) - INTERLEAVE_SYS_PORT_PFN_START))
++#define INTERLEAVE_SYS_PORT_PFN_END			((CONFIG_RISCV_INTERLEAVE_UNCACHED_OFFSET + CONFIG_RISCV_INTERLEAVE_MEM_MAX_SIZE) >> PAGE_SHIFT)
++
++#define INTERLEAVE_SYS_PORT_LLC_PFN_START		((CONFIG_RISCV_INTERLEAVE_UNCACHED_OFFSET + 0x3000000000) >> PAGE_SHIFT)
++#define INTERLEAVE_MEM_TO_SYS_LLC_PFN_ADDRESS(a)	(INTERLEAVE_SYS_PORT_LLC_PFN_START + ((u64)(a) - INTERLEAVE_MEM_PORT_PFN_START))
++#define INTERLEAVE_SYS_LLC_TO_MEM_PFN_ADDRESS(a)	(INTERLEAVE_MEM_PORT_PFN_START + ((u64)(a) - INTERLEAVE_SYS_PORT_LLC_PFN_START))
++#define INTERLEAVE_SYS_PORT_LLC_PFN_END			(((CONFIG_RISCV_INTERLEAVE_UNCACHED_OFFSET + 0x3000000000) + CONFIG_RISCV_INTERLEAVE_MEM_MAX_SIZE) >> PAGE_SHIFT)
++
++/* --------new conversion------- */
++/* DIE0 MEM PORT Address range 0x8000 0000 --- 0xF FFFF FFFF, 62GB */
++#define _MEM_PORT_D0_ADDR_RANGE_VAL	((0x1FUL << 31) >> PAGE_SHIFT)
++#define _MEM_PORT_D0_ADDR_RANGE_BITMASK	(GENMASK_ULL(63, 31) >> PAGE_SHIFT)
++
++/* DIE1 MEM PORT Address range 0x20 0000 0000 --- 0x2F FFFF FFFF, 64GB */
++#define _MEM_PORT_D1_ADDR_RANGE_VAL	((0x2UL << 36) >> PAGE_SHIFT)
++#define _MEM_PORT_D1_ADDR_RANGE_BITMASK	(GENMASK_ULL(63, 36) >> PAGE_SHIFT)
++
++/* Dual die, MEM PORT Interleave Address range:0x40 0000 0000 --- 0x5F FFFF FFFF, 128GB
++   part 0: 0x40 0000 0000 --- 0x4F FFFF FFFF, 64GB
++   part 1: 0x50 0000 0000 --- 0x5F FFFF FFFF, 64GB
++ */
++#define _MEM_PORT_INTPART0_ADDR_RANGE_VAL	((0x4UL << 36) >> PAGE_SHIFT)
++#define _MEM_PORT_INTPART0_ADDR_RANGE_BITMASK	(GENMASK_ULL(63, 36)>> PAGE_SHIFT)
++#define _MEM_PORT_INTPART1_ADDR_RANGE_VAL	((0x5UL << 36) >> PAGE_SHIFT)
++#define _MEM_PORT_INTPART1_ADDR_RANGE_BITMASK	(GENMASK_ULL(63, 36) >> PAGE_SHIFT)
++
++
++/* DIE0 SYS PORT Address range 0xC0 0000 0000 --- 0xCF FFFF FFFF, 64GB */
++#define _SYS_PORT_D0_ADDR_RANGE_VAL		((0xCUL << 36) >> PAGE_SHIFT)
++#define _SYS_PORT_D0_ADDR_RANGE_BITMASK		(GENMASK_ULL(63, 36) >> PAGE_SHIFT)
++
++/* DIE0 SYS LLC PORT Address range 0xD8 0000 0000 --- 0xDF FFFF FFFF, 32GB */
++#define _SYSLLC_PORT_D0_ADDR_RANGE_VAL		((0x1BUL << 35) >> PAGE_SHIFT)
++#define _SYSLLC_PORT_D0_ADDR_RANGE_BITMASK	(GENMASK_ULL(63, 35)  >> PAGE_SHIFT)
++
++/* DIE1 SYS PORT Address range 0xE0 0000 0000 --- 0xEF FFFF FFFF, 64GB */
++#define _SYS_PORT_D1_ADDR_RANGE_VAL		((0xEUL << 36) >> PAGE_SHIFT)
++#define _SYS_PORT_D1_ADDR_RANGE_BITMASK		(GENMASK_ULL(63, 36) >> PAGE_SHIFT)
++
++/* DIE1 SYS LLC PORT Address range 0xF8 0000 0000 --- 0xFF FFFF FFFF, 32GB */
++#define _SYSLLC_PORT_D1_ADDR_RANGE_VAL		((0x1FUL << 35) >> PAGE_SHIFT)
++#define _SYSLLC_PORT_D1_ADDR_RANGE_BITMASK	(GENMASK_ULL(63, 35) >> PAGE_SHIFT)
++
++/* Dual die, SYS PORT Interleave Address range:0x100 0000 0000 --- 0x11F FFFF FFFF, 128GB
++   part 0: 0x100 0000 0000 --- 0x10F FFFF FFFF, 64GB
++   part 1: 0x110 0000 0000 --- 0x11F FFFF FFFF, 64GB
++ */
++#define _SYS_PORT_INTPART0_ADDR_RANGE_VAL	((0x10UL << 36) >> PAGE_SHIFT)
++#define _SYS_PORT_INTPART0_ADDR_RANGE_BITMASK	(GENMASK_ULL(63, 36) >> PAGE_SHIFT)
++#define _SYS_PORT_INTPART1_ADDR_RANGE_VAL	((0x11UL << 36) >> PAGE_SHIFT)
++#define _SYS_PORT_INTPART1_ADDR_RANGE_BITMASK	(GENMASK_ULL(63, 36) >> PAGE_SHIFT)
++
++/* Dual die, SYS LLC PORT Interleave Address range:0x130 0000 0000 --- 0x13F FFFF FFFF, 64GB */
++#define _SYSLLC_PORT_INT_ADDR_RANGE_VAL		((0x13UL << 36) >> PAGE_SHIFT)
++#define _SYSLLC_PORT_INT_ADDR_RANGE_BITMASK	(GENMASK_ULL(63, 36) >> PAGE_SHIFT)
++
++#define CHECK_MEMORY_RANGE_OPFUNC(pfn, range, die)	((pfn & _##range##_PORT_##die##_ADDR_RANGE_BITMASK) == _##range##_PORT_##die##_ADDR_RANGE_VAL)
++
++/* pha conversion between mem port and sys port or sysllc_port */
++static inline unsigned long convert_pfn_from_mem_to_sys_port(unsigned long pfn)
++{
++	if (((pfn & _MEM_PORT_D0_ADDR_RANGE_BITMASK) >= DIE0_MEM_PORT_PFN_START) && ((pfn & _MEM_PORT_D0_ADDR_RANGE_BITMASK) <= DIE0_MEM_PORT_PFN_END)) {
++		return DIE0_MEM_TO_SYS_PFN_ADDRESS(pfn);
++	}
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC7702_SOC)
++	else if (pfn < DIE0_MEM_PORT_PFN_START) {
++		return pfn;
++	}
++	else if (CHECK_MEMORY_RANGE_OPFUNC(pfn, MEM, D1)) {
++		return DIE1_MEM_TO_SYS_PFN_ADDRESS(pfn);
++	}
++	else if (CHECK_MEMORY_RANGE_OPFUNC(pfn, MEM, INTPART0) || CHECK_MEMORY_RANGE_OPFUNC(pfn, MEM, INTPART1)) {
++		return INTERLEAVE_MEM_TO_SYS_PFN_ADDRESS(pfn);
++	}
++#endif
++	else
++		return pfn;
++}
++#define convert_pha_from_mem_to_sys_port(pha) \
++			(convert_pfn_from_mem_to_sys_port(pha >> PAGE_SHIFT) << PAGE_SHIFT)
++
++static inline unsigned long convert_pfn_from_mem_to_sys_port_llc(unsigned long pfn)
++{
++	if (((pfn & _MEM_PORT_D0_ADDR_RANGE_BITMASK) >= DIE0_MEM_PORT_PFN_START) && ((pfn & _MEM_PORT_D0_ADDR_RANGE_BITMASK) <= DIE0_MEM_PORT_PFN_END)) {
++		return DIE0_MEM_TO_SYS_LLC_PFN_ADDRESS(pfn);
++	}
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC7702_SOC)
++	else if (pfn < DIE0_MEM_PORT_PFN_START) {
++		return pfn;
++	}
++	else if (CHECK_MEMORY_RANGE_OPFUNC(pfn, MEM, D1)) {
++		return DIE1_MEM_TO_SYS_LLC_PFN_ADDRESS(pfn);
++	}
++	else if (CHECK_MEMORY_RANGE_OPFUNC(pfn, MEM, INTPART0) || CHECK_MEMORY_RANGE_OPFUNC(pfn, MEM, INTPART1)) {
++		return INTERLEAVE_MEM_TO_SYS_LLC_PFN_ADDRESS(pfn);
++	}
++#endif
++	else
++		return pfn;
++}
++#define convert_pha_from_mem_to_sys_port_llc(pha) \
++			(convert_pfn_from_mem_to_sys_port_llc(pha >> PAGE_SHIFT) << PAGE_SHIFT)
++
++static inline unsigned long convert_pfn_from_sys_to_mem_port(unsigned long pfn)
++{
++	if (likely(CHECK_MEMORY_RANGE_OPFUNC(pfn, SYS, D0))) {
++		return DIE0_SYS_TO_MEM_PFN_ADDRESS(pfn);
++	}
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC7702_SOC)
++	else if (pfn < DIE0_MEM_PORT_PFN_START) {
++		return pfn;
++	}
++	else if (CHECK_MEMORY_RANGE_OPFUNC(pfn, SYS, D1)) {
++		return DIE1_SYS_TO_MEM_PFN_ADDRESS(pfn);
++	}
++	else if (CHECK_MEMORY_RANGE_OPFUNC(pfn, SYS, INTPART0) || CHECK_MEMORY_RANGE_OPFUNC(pfn, SYS, INTPART1)) {
++		return INTERLEAVE_SYS_TO_MEM_PFN_ADDRESS(pfn);
++	}
++#endif
++	else
++		return pfn;
++}
++
++static inline unsigned long convert_pfn_from_sys_llc_to_mem_port(unsigned long pfn)
++{
++	if (likely(CHECK_MEMORY_RANGE_OPFUNC(pfn, SYSLLC, D0))) {
++		return DIE0_SYS_LLC_TO_MEM_PFN_ADDRESS(pfn);
++	}
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC7702_SOC)
++	else if (pfn < DIE0_MEM_PORT_PFN_START) {
++		return pfn;
++	}
++	else if (CHECK_MEMORY_RANGE_OPFUNC(pfn, SYSLLC, D1)) {
++		return DIE1_SYS_LLC_TO_MEM_PFN_ADDRESS(pfn);
++	}
++	else if (CHECK_MEMORY_RANGE_OPFUNC(pfn, SYSLLC, INT)) {
++		return INTERLEAVE_SYS_LLC_TO_MEM_PFN_ADDRESS(pfn);
++	}
++#endif
++	else
++		return pfn;
++}
++#endif
++
+ extern pgd_t swapper_pg_dir[];
+ extern pgd_t trampoline_pg_dir[];
+ extern pgd_t early_pg_dir[];
+@@ -325,12 +508,21 @@ static inline unsigned long pte_napot(pt
+ /* Yields the page frame number (PFN) of a page table entry */
+ static inline unsigned long pte_pfn(pte_t pte)
+ {
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC770X_SOC_FAMILY)
++	if (unlikely(pte_val(pte) & _PAGE_UNCACHE)) {
++		return convert_pfn_from_sys_to_mem_port(__page_val_to_pfn(pte_val(pte)));
++	}
++	else {
++		return convert_pfn_from_sys_llc_to_mem_port(__page_val_to_pfn(pte_val(pte)));
++	}
++#else
+ 	unsigned long res  = __page_val_to_pfn(pte_val(pte));
+ 
+ 	if (has_svnapot() && pte_napot(pte))
+ 		res = res & (res - 1UL);
+ 
+ 	return res;
++#endif
+ }
+ 
+ #define pte_page(x)     pfn_to_page(pte_pfn(x))
+@@ -338,11 +530,27 @@ static inline unsigned long pte_pfn(pte_
+ /* Constructs a page table entry */
+ static inline pte_t pfn_pte(unsigned long pfn, pgprot_t prot)
+ {
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC770X_SOC_FAMILY)
++	unsigned long pfn_new;
++
++	if (unlikely(_PAGE_UNCACHE == (pgprot_val(prot) & _PAGE_UNCACHE))) {
++		pfn_new = convert_pfn_from_mem_to_sys_port(pfn);
++		pr_debug("pfn_pte:pfn_mport 0x%lx to pfn_sysport 0x%lx\n", pfn, pfn_new);
++		return __pte((pfn_new << _PAGE_PFN_SHIFT) | pgprot_val(prot));
++	}
++	else if (unlikely(_PAGE_LLC == (pgprot_val(prot) & _PAGE_LLC))) {
++		pfn_new = convert_pfn_from_mem_to_sys_port_llc(pfn);
++		pr_debug("pfn_pte:pfn_mport 0x%lx to pfn_llc 0x%lx\n", pfn, pfn_new);
++		return __pte((pfn_new << _PAGE_PFN_SHIFT) | (pgprot_val(prot) & ~_PAGE_LLC));
++	}
++	return __pte((pfn << _PAGE_PFN_SHIFT) | pgprot_val(prot));
++#else
+ 	unsigned long prot_val = pgprot_val(prot);
+ 
+ 	ALT_THEAD_PMA(prot_val);
+ 
+ 	return __pte((pfn << _PAGE_PFN_SHIFT) | prot_val);
++#endif
+ }
+ 
+ #define mk_pte(page, prot)       pfn_pte(page_to_pfn(page), prot)
+@@ -613,6 +821,17 @@ static inline int ptep_clear_flush_young
+ 	return ptep_test_and_clear_young(vma, address, ptep);
+ }
+ 
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC770X_SOC_FAMILY)
++#define pgprot_noncached(prot) \
++			__pgprot(pgprot_val(prot) | _PAGE_UNCACHE)
++
++#define pgprot_writecombine(prot) pgprot_noncached(prot)
++
++#define pgprot_dmacoherent(prot)    pgprot_noncached(prot)
++
++#define pgprot_llc(prot) \
++			__pgprot(pgprot_val(prot) | _PAGE_LLC)
++#else
+ #define pgprot_noncached pgprot_noncached
+ static inline pgprot_t pgprot_noncached(pgprot_t _prot)
+ {
+@@ -634,6 +853,7 @@ static inline pgprot_t pgprot_writecombi
+ 
+ 	return __pgprot(prot);
+ }
++#endif
+ 
+ /*
+  * THP functions
+--- a/arch/riscv/mm/dma-noncoherent.c
++++ b/arch/riscv/mm/dma-noncoherent.c
+@@ -7,6 +7,7 @@
+ 
+ #include <linux/dma-direct.h>
+ #include <linux/dma-map-ops.h>
++#include <linux/io.h>
+ #include <linux/mm.h>
+ #include <asm/cacheflush.h>
+ #include <asm/dma-noncoherent.h>
+@@ -156,3 +157,79 @@ void __init riscv_set_dma_cache_alignmen
+ 	if (!noncoherent_supported)
+ 		dma_cache_alignment = 1;
+ }
++
++#ifdef CONFIG_ARCH_HAS_DMA_SET_UNCACHED
++static struct page **__iommu_dma_common_find_pages(void *cpu_addr)
++{
++	struct vm_struct *area = find_vm_area(cpu_addr);
++
++	if (!area || area->flags != VM_DMA_COHERENT)
++		return NULL;
++	return area->pages;
++}
++
++void arch_dma_clear_uncached(void *addr, size_t size)
++{
++	struct page **pages = NULL;
++
++	pr_debug("smmu_dbg, %s, remap addr:0x%p, size:0x%lx\n",
++		__func__, addr, size);
++	pages = __iommu_dma_common_find_pages(addr);
++	if (!pages) { // todo: supposed to handle this error
++		pr_err( "smmu_dbg, %s:%d, fail to find pages\n",
++			__func__, __LINE__);
++
++		return;
++	}
++	kvfree(pages);
++	memunmap(addr);
++}
++
++void *arch_dma_set_uncached(void *addr, size_t size)
++{
++	struct page **pages = NULL;
++	static struct page *page = NULL;
++	struct vm_struct *area = NULL;
++	phys_addr_t phys_addr = convert_pha_from_mem_to_sys_port(__pa(addr));
++	void *mem_base = NULL;
++
++	pr_debug("smmu_dbg, %s, pfn:0x%lx, pha:0x%016lx, vaddr:0x%px\n",
++		__func__, virt_to_pfn(addr), __pa(addr), addr);
++	mem_base = memremap(phys_addr, size, MEMREMAP_WT);
++	if (!mem_base) {
++		pr_err("%s memremap failed for addr %px\n", __func__, addr);
++		return ERR_PTR(-EINVAL);
++	}
++
++	pr_debug("smmu_dbg, %s, pha+offset:0x%016llx, remap vaddr:0x%px, size:0x%lx\n",
++		__func__, phys_addr, mem_base, size);
++
++	pages = kvzalloc(sizeof(*pages), GFP_KERNEL);
++	if (!pages) {
++		pr_err("smmu_dbg, %s:%d, failed to alloc memory!\n",
++			__func__, __LINE__);
++		goto err_pages_alloc;
++	}
++	page = virt_to_page(addr);
++	area = find_vm_area(mem_base);
++	if (!area) {
++		pr_err("smmu_dbg, %s:%d, failed to find vm area!\n",
++			__func__, __LINE__);
++		goto err_find_vm_area;
++	}
++	pr_debug("smmu_dbg, %s, check area-pages=0x%px\n", __func__, area->pages);
++	pages[0] = page;
++	area->pages = pages;
++	area->flags = VM_DMA_COHERENT;
++
++	return mem_base;
++
++err_find_vm_area:
++	kvfree(pages);
++
++err_pages_alloc:
++	memunmap(mem_base);
++
++	return NULL;
++}
++#endif
+\ No newline at end of file
+--- a/drivers/soc/sifive/Kconfig
++++ b/drivers/soc/sifive/Kconfig
+@@ -7,4 +7,89 @@ config SIFIVE_CCACHE
+ 	help
+ 	  Support for the composable cache controller on SiFive platforms.
+ 
++config ARCH_ESWIN_EIC770X_SOC_FAMILY
++	bool "ESWIN EIC770X SoC Family"
++	depends on SOC_SIFIVE
++	select SIFIVE_CCACHE
++	select RISCV_NONSTANDARD_CACHE_OPS
++	select DMA_DIRECT_REMAP
++	select RISCV_DMA_NONCOHERENT
++	select ARCH_HAS_DMA_SET_UNCACHED
++	select ARCH_HAS_DMA_CLEAR_UNCACHED
++	select ESWIN_MC
++	select ESWIN_RSV_MEMBLOCK
++	select ESWIN_CODACACHE_CONTROLLER
++
++menu "ESWIN EIC770X SoC Family Selection"
++	depends on ARCH_ESWIN_EIC770X_SOC_FAMILY
++
++choice
++	prompt "ESWIN EIC770X SoC Family Selection"
++	help
++	  This option select the SoC type of ESWIN EIC770X Family.
++
++config ARCH_ESWIN_EIC7700_SOC
++	bool "Enable support for ESWIN EIC7700 SoC"
++
++config ARCH_ESWIN_EIC7702_SOC
++	bool "Enable support for ESWIN EIC7702 SoC"
++
++endchoice
++endmenu
++
++if ARCH_ESWIN_EIC770X_SOC_FAMILY
++config RISCV_DIE0_UNCACHED_OFFSET
++	hex "DIE0 system port addr of U84"
++	default 0xc000000000
++	help
++	  Access to DDR memory through U84 system port is uncached.
++	  Add this offset when allocating  memory from memory port(0x80000000~),
++	  then memremap to virtual address.
++
++config RISCV_DIE0_CACHED_OFFSET
++	hex "DIE0 memory port addr of U84"
++	default 0x80000000
++	help
++	  Access to DDR memory through U84 memory port is cached.
++
++config RISCV_DIE0_MEM_MAX_SIZE
++	hex "DIE0 memory size, default 32GB"
++	default 0x800000000
++
++config RISCV_DIE1_UNCACHED_OFFSET
++	hex "DIE1 system port addr of U84"
++	default 0xe000000000
++	help
++	  Access to DIE1 DDR memory through U84 system port is uncached.
++	  Add this offset when allocating  memory from memory port(0x2000000000~),
++	  then memremap to virtual address.
++
++config RISCV_DIE1_CACHED_OFFSET
++	hex "DIE1 memory port addr of U84"
++	default 0x2000000000
++	help
++	  Access to DIE1 DDR memory through U84 memory port is cached.
++
++config RISCV_DIE1_MEM_MAX_SIZE
++	hex "DIE1 memory size, default 32GB"
++	default 0x800000000
++
++config RISCV_INTERLEAVE_UNCACHED_OFFSET
++	hex "system port addr of interleave"
++	default 0x10000000000
++	help
++	  Access to DDR memory through U84 system port with interleave is uncached.
++	  Add this offset when allocating  memory from memory port(0x4000000000~),
++	  then memremap to virtual address.
++
++config RISCV_INTERLEAVE_CACHED_OFFSET
++	hex "memory port addr of interleave"
++	default 0x4000000000
++	help
++	  Access to DDR memory through U84 memory port with interleave is cached.
++
++config RISCV_INTERLEAVE_MEM_MAX_SIZE
++	hex "Interleaving memory size, default 64GB"
++	default 0x1000000000
++endif
+ endif
+--- a/drivers/soc/sifive/sifive_ccache.c
++++ b/drivers/soc/sifive/sifive_ccache.c
+@@ -17,6 +17,8 @@
+ #include <asm/cacheinfo.h>
+ #include <soc/sifive/sifive_ccache.h>
+ 
++#include <asm/dma-noncoherent.h>
++
+ #define SIFIVE_CCACHE_DIRECCFIX_LOW 0x100
+ #define SIFIVE_CCACHE_DIRECCFIX_HIGH 0x104
+ #define SIFIVE_CCACHE_DIRECCFIX_COUNT 0x108
+@@ -44,6 +46,9 @@
+ 
+ #define SIFIVE_CCACHE_MAX_ECCINTR 4
+ 
++#define SIFIVE_CCACHE_FLUSH64 0x200
++#define SIFIVE_CCACHE_FLUSH64_LINE_LEN 64
++
+ static void __iomem *ccache_base;
+ static int g_irq[SIFIVE_CCACHE_MAX_ECCINTR];
+ static struct riscv_cacheinfo_ops ccache_cache_ops;
+@@ -103,6 +108,39 @@ static void ccache_config_read(void)
+ 	pr_info("Index of the largest way enabled: %u\n", cfg);
+ }
+ 
++#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC770X_SOC_FAMILY)
++static void ccache_way_enable(void)
++{
++	u32 cfg, val;
++
++	cfg = readl(ccache_base + SIFIVE_CCACHE_CONFIG);
++	val = FIELD_GET(SIFIVE_CCACHE_CONFIG_WAYS_MASK, cfg);
++	writel(val -1 , ccache_base + SIFIVE_CCACHE_WAYENABLE);
++}
++
++static void ccache_flush64_range(phys_addr_t paddr, size_t size)
++{
++	unsigned long line;
++
++	size = size + (paddr % SIFIVE_CCACHE_FLUSH64_LINE_LEN);
++	paddr = ALIGN_DOWN(paddr, SIFIVE_CCACHE_FLUSH64_LINE_LEN);
++
++	mb();	/* sync */
++
++	for (line = paddr; line < paddr + size;
++	line += SIFIVE_CCACHE_FLUSH64_LINE_LEN) {
++		writeq(line, ccache_base + SIFIVE_CCACHE_FLUSH64);
++		mb();
++	}
++}
++
++static const struct riscv_nonstd_cache_ops ccache_cmo_ops __initdata = {
++	.wback = &ccache_flush64_range,
++	.inv = &ccache_flush64_range,
++	.wback_inv = &ccache_flush64_range,
++};
++#endif
++
+ static const struct of_device_id sifive_ccache_ids[] = {
+ 	{ .compatible = "sifive,fu540-c000-ccache" },
+ 	{ .compatible = "sifive,fu740-c000-ccache" },
+@@ -249,6 +287,11 @@ static int __init sifive_ccache_init(voi
+ 	}
+ 	of_node_put(np);
+ 
++	#if IS_ENABLED(CONFIG_ARCH_ESWIN_EIC770X_SOC_FAMILY)
++	ccache_way_enable();
++	riscv_noncoherent_register_cache_ops(&ccache_cmo_ops);
++	#endif
++
+ 	ccache_config_read();
+ 
+ 	ccache_cache_ops.get_priv_group = ccache_get_priv_group;

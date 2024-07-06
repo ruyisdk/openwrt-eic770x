@@ -1,0 +1,79 @@
+From 3ef4c414db8ce9271985ab3c0f94610daa899d72 Mon Sep 17 00:00:00 2001
+From: lilijun <lilijun@eswincomputing.com>
+Date: Thu, 13 Jun 2024 14:17:37 +0800
+Subject: [PATCH 50/68] WIN2030-15512:feat:Support tca6416 for csi reset
+
+Changelogs:
+1.Enable tca6416 gpio expaner
+2.Sensor reset needed
+
+Change-Id: I7ffd5b16d4097bd89ed4fa3068326240134b464d
+---
+ arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts | 23 +++++++++++++++++++-
+ arch/riscv/boot/dts/eswin/eic7700-evb.dts    | 23 +++++++++++++++++++-
+ 2 files changed, 44 insertions(+), 2 deletions(-)
+
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb-a2.dts
+@@ -770,7 +770,28 @@
+ 
+ &d0_i2c8 {
+ 	/* io extended for mipi csi */
+-	status = "disabled";
++	status = "okay";
++	tca6416_0: gpio@20 {
++		compatible = "ti,tca6416";
++		reg = <0x20>;
++		gpio-controller; /* IRQ not connected */
++		#gpio-cells = <2>;
++		gpio-line-names = "MIPI_CSI0_PWDN", "MIPI_CSI0_RESET", "MIPI_CSI1_FBC", "MIPI_CSI1_ENB",
++				"MIPI_CSI1_RESET", "MIPI_CSI1_PWDN", "FREX_GP0", "",
++				"MIPI_CSI0_ENB", "MIPI_CSI0_FBC", "FREX_GP2", "MIPI_CSI2_FBC",
++				"MIPI_CSI2_ENB", "FREX_GP1", "MIPI_CSI2_RESET", "MIPI_CSI2_PWDN";
++	};
++	tca6416_1: gpio@21 {
++		compatible = "ti,tca6416";
++		reg = <0x21>;
++		gpio-controller;
++		#gpio-cells = <2>;
++		/* IRQ not connected */
++		gpio-line-names = "MIPI_CSI3_PWDN", "MIPI_CSI3_RESET", "MIPI_CSI3_ENB", "MIPI_CSI3_FBC",
++				"MIPI_CSI4_PWDN", "MIPI_CSI4_RESET", "MIPI_CSI4_ENB", "MIPI_CSI4_FBC",
++				"MIPI_CSI5_FBC", "MIPI_CSI5_ENB", "MIPI_CSI5_RESET", "MIPI_CSI5_PWDN",
++				"", "", "", "";
++	};
+ };
+ 
+ &d0_i2c9 {
+--- a/arch/riscv/boot/dts/eswin/eic7700-evb.dts
++++ b/arch/riscv/boot/dts/eswin/eic7700-evb.dts
+@@ -727,7 +727,28 @@
+ 
+ &d0_i2c8 {
+ 	/* io extended for mipi csi */
+-	status = "disabled";
++	status = "okay";
++	tca6416_0: gpio@20 {
++	compatible = "ti,tca6416";
++		reg = <0x20>;
++		gpio-controller; /* IRQ not connected */
++		#gpio-cells = <2>;
++		gpio-line-names = "MIPI_CSI0_PWDN", "MIPI_CSI0_RESET", "MIPI_CSI1_FBC", "MIPI_CSI1_ENB",
++				"MIPI_CSI1_RESET", "MIPI_CSI1_PWDN", "FREX_GP0", "",
++				"MIPI_CSI0_ENB", "MIPI_CSI0_FBC", "FREX_GP2", "MIPI_CSI2_FBC",
++				"MIPI_CSI2_ENB", "FREX_GP1", "MIPI_CSI2_RESET", "MIPI_CSI2_PWDN";
++	};
++	tca6416_1: gpio@21 {
++		compatible = "ti,tca6416";
++		reg = <0x21>;
++		gpio-controller;
++		#gpio-cells = <2>;
++		/* IRQ not connected */
++		gpio-line-names = "MIPI_CSI3_PWDN", "MIPI_CSI3_RESET", "MIPI_CSI3_ENB", "MIPI_CSI3_FBC",
++				"MIPI_CSI4_PWDN", "MIPI_CSI4_RESET", "MIPI_CSI4_ENB", "MIPI_CSI4_FBC",
++				"MIPI_CSI5_FBC", "MIPI_CSI5_ENB", "MIPI_CSI5_RESET", "MIPI_CSI5_PWDN",
++				"", "", "", "";
++	};
+ };
+ 
+ &d0_i2c9 {

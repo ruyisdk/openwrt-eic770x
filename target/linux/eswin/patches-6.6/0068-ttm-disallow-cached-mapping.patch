@@ -1,0 +1,102 @@
+From 6e9b08a030ff6a1e7be46becd7cf7fa1f972b748 Mon Sep 17 00:00:00 2001
+From: Icenowy Zheng <uwu@icenowy.me>
+Date: Fri, 24 Feb 2023 17:23:17 +0800
+Subject: [PATCH 68/68] ttm: disallow cached mapping
+
+Signed-off-by: Icenowy Zheng <uwu@icenowy.me>
+---
+ drivers/gpu/drm/drm_gem_vram_helper.c | 2 +-
+ drivers/gpu/drm/ttm/ttm_bo_util.c     | 6 ++++--
+ drivers/gpu/drm/ttm/ttm_module.c      | 3 ++-
+ drivers/gpu/drm/ttm/ttm_resource.c    | 7 ++++---
+ drivers/gpu/drm/ttm/ttm_tt.c          | 2 +-
+ 5 files changed, 12 insertions(+), 8 deletions(-)
+
+--- a/drivers/gpu/drm/drm_gem_vram_helper.c
++++ b/drivers/gpu/drm/drm_gem_vram_helper.c
+@@ -870,7 +870,7 @@ static struct ttm_tt *bo_driver_ttm_tt_c
+ 	if (!tt)
+ 		return NULL;
+ 
+-	ret = ttm_tt_init(tt, bo, page_flags, ttm_cached, 0);
++	ret = ttm_tt_init(tt, bo, page_flags, ttm_write_combined, 0);
+ 	if (ret < 0)
+ 		goto err_ttm_tt_init;
+ 
+--- a/drivers/gpu/drm/ttm/ttm_bo_util.c
++++ b/drivers/gpu/drm/ttm/ttm_bo_util.c
+@@ -353,7 +353,7 @@ static int ttm_bo_kmap_ttm(struct ttm_bu
+ 	ret = ttm_tt_populate(bo->bdev, ttm, &ctx);
+ 	if (ret)
+ 		return ret;
+-
++#if 0
+ 	if (num_pages == 1 && ttm->caching == ttm_cached &&
+ 	    !(man->use_tt && (ttm->page_flags & TTM_TT_FLAG_DECRYPTED))) {
+ 		/*
+@@ -364,7 +364,9 @@ static int ttm_bo_kmap_ttm(struct ttm_bu
+ 		map->bo_kmap_type = ttm_bo_map_kmap;
+ 		map->page = ttm->pages[start_page];
+ 		map->virtual = kmap(map->page);
+-	} else {
++	} else
++#endif
++	{
+ 		/*
+ 		 * We need to use vmap to get the desired page protection
+ 		 * or to make the buffer object look contiguous.
+--- a/drivers/gpu/drm/ttm/ttm_module.c
++++ b/drivers/gpu/drm/ttm/ttm_module.c
+@@ -74,7 +74,8 @@ pgprot_t ttm_prot_from_caching(enum ttm_
+ #endif /* CONFIG_UML */
+ #endif /* __i386__ || __x86_64__ */
+ #if defined(__ia64__) || defined(__arm__) || defined(__aarch64__) || \
+-	defined(__powerpc__) || defined(__mips__) || defined(__loongarch__)
++	defined(__powerpc__) || defined(__mips__) || defined(__loongarch__) || \
++	defined(__riscv)
+ 	if (caching == ttm_write_combined)
+ 		tmp = pgprot_writecombine(tmp);
+ 	else
+--- a/drivers/gpu/drm/ttm/ttm_resource.c
++++ b/drivers/gpu/drm/ttm/ttm_resource.c
+@@ -187,7 +187,7 @@ void ttm_resource_init(struct ttm_buffer
+ 	res->bus.addr = NULL;
+ 	res->bus.offset = 0;
+ 	res->bus.is_iomem = false;
+-	res->bus.caching = ttm_cached;
++	res->bus.caching = ttm_write_combined;
+ 	res->bo = bo;
+ 
+ 	man = ttm_manager_type(bo->bdev, place->mem_type);
+@@ -670,17 +670,18 @@ ttm_kmap_iter_linear_io_init(struct ttm_
+ 	} else {
+ 		iter_io->needs_unmap = true;
+ 		memset(&iter_io->dmap, 0, sizeof(iter_io->dmap));
+-		if (mem->bus.caching == ttm_write_combined)
++		if (mem->bus.caching == ttm_write_combined  || mem->bus.caching == ttm_cached)
+ 			iosys_map_set_vaddr_iomem(&iter_io->dmap,
+ 						  ioremap_wc(mem->bus.offset,
+ 							     mem->size));
++#if 0
+ 		else if (mem->bus.caching == ttm_cached)
+ 			iosys_map_set_vaddr(&iter_io->dmap,
+ 					    memremap(mem->bus.offset, mem->size,
+ 						     MEMREMAP_WB |
+ 						     MEMREMAP_WT |
+ 						     MEMREMAP_WC));
+-
++#endif
+ 		/* If uncached requested or if mapping cached or wc failed */
+ 		if (iosys_map_is_null(&iter_io->dmap))
+ 			iosys_map_set_vaddr_iomem(&iter_io->dmap,
+--- a/drivers/gpu/drm/ttm/ttm_tt.c
++++ b/drivers/gpu/drm/ttm/ttm_tt.c
+@@ -154,7 +154,7 @@ static void ttm_tt_init_fields(struct tt
+ 	ttm->dma_address = NULL;
+ 	ttm->swap_storage = NULL;
+ 	ttm->sg = bo->sg;
+-	ttm->caching = caching;
++	ttm->caching = ttm_write_combined;
+ }
+ 
+ int ttm_tt_init(struct ttm_tt *ttm, struct ttm_buffer_object *bo,

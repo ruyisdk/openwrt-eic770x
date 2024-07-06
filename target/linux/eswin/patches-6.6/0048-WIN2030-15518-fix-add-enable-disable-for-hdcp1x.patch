@@ -1,0 +1,28 @@
+From ee6620351c204c4c4cd3e7a6e4b39249421079f0 Mon Sep 17 00:00:00 2001
+From: yiguo <yiguo@eswincomputing.com>
+Date: Thu, 6 Jun 2024 17:04:36 +0800
+Subject: [PATCH 48/68] WIN2030-15518:fix:add enable/disable for hdcp1x
+
+Changelogs:
+1. add enable/disable for hdcp1x
+
+Change-Id: Ic2e61eb2a71a2cd1cad0891a8e5d3b63ae23460d
+---
+ drivers/gpu/drm/eswin/Kconfig | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+--- a/drivers/gpu/drm/eswin/Kconfig
++++ b/drivers/gpu/drm/eswin/Kconfig
+@@ -71,6 +71,12 @@ config DW_HDMI_HDCP2
+       Support the HDCP2 interface which is part of the Synopsys
+       Designware HDMI block.
+ 
++config DW_HDMI_HDCP1X_ENABLED
++    bool "Synopsis Designware HDCP1X enabled"
++    depends on DW_HDMI_HDCP
++    help
++      Enable/Disable HDCP1X of the Synopsys Designware HDMI block.
++
+ 
+ config ESWIN_MIPI_DSI
+     tristate "Eswin mipi dsi and 1080p panel driver"
